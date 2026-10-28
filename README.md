@@ -67,7 +67,8 @@ git push -u origin main
 3. リポジトリを選んで、以下のように設定（`render.yaml` があるため基本は自動入力されます）：
    - **Runtime**: `Python 3`
    - **Build Command**: `pip install -r requirements.txt`
-   - **Start Command**: `uvicorn backend.app:app --host 0.0.0.0 --port $PORT`
+   - **Start Command**: `python -m uvicorn backend.app:app --host 0.0.0.0 --port $PORT`
+     *(※ `uvicorn: command not found` を防ぐため `python -m uvicorn` を指定します)*
    - **Instance Type**: `Free`
    - **Environment Variables**: **何も入力不要（空でOK）**
 4. 「**Create Web Service**」をクリック。
