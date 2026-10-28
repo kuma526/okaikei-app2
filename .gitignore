@@ -1,0 +1,22 @@
+# Python / Virtual Environment
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+
+# Secrets & Credentials (GitHubに上げないよう保護)
+credentials.json
+service_account.json
+token.json
+.env
+
+# Local Database & Temporary Uploads
+backend/data/*.db
+backend/uploads/*
+!backend/uploads/.gitkeep
+!backend/data/.gitkeep
+
