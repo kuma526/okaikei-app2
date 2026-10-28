@@ -100,7 +100,7 @@ const COMMON_DESCRIPTIONS = {
 const BANKS = ["三井住友銀行", "楽天銀行", "三菱UFJ銀行", "みずほ銀行", "ゆうちょ銀行", "PayPay銀行", "住信SBIネット銀行", "現金"];
 
 function App() {
-  const [activeTab, setActiveTab] = useState("input"); // 'input', 'list', 'calendar', 'export', 'settings'
+  const [activeTab, setActiveTab] = useState("input"); // 'input', 'list', 'export', 'settings'
   const [currentMonth, setCurrentMonth] = useState(new Date().toISOString().slice(0, 7)); // 'YYYY-MM'
   
   // トランザクション & 集計データ
@@ -127,10 +127,6 @@ function App() {
   const [uploadingImage, setUploadingImage] = useState(false);
   const [previewImage, setPreviewImage] = useState(null);
   const fileInputRef = useRef(null);
-
-  // カレンダー同期状態
-  const [syncStatus, setSyncStatus] = useState(null);
-  const [syncing, setSyncing] = useState(false);
 
   // 設定状態
   const [settings, setSettings] = useState({
@@ -237,7 +233,7 @@ function App() {
     }
   };
 
-  // ファイルアップロード（即座に保存）
+  // ファイルアップロード（即時サーバー保存）
   const handleFileUpload = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -345,34 +341,6 @@ function App() {
     }
   };
 
-  // Googleカレンダー同期実行
-  const handleCalendarSync = async (mode, targetVal) => {
-    setSyncing(true);
-    setSyncStatus(null);
-    try {
-      let endpoint = "/api/calendar/sync-day";
-      let body = { date: targetVal, calendar_id: settings.google_calendar_id };
-
-      if (mode === "month") {
-        endpoint = "/api/calendar/sync-month";
-        body = { month: targetVal, calendar_id: settings.google_calendar_id };
-      }
-
-      const res = await fetch(endpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body)
-      });
-      const data = await res.json();
-      setSyncStatus(data);
-      showAlert("Googleカレンダー同期処理が完了しました！");
-    } catch (e) {
-      showAlert("カレンダー同期中にエラーが発生しました", "error");
-    } finally {
-      setSyncing(false);
-    }
-  };
-
   // 設定保存
   const handleSaveSettings = async (e) => {
     e.preventDefault();
@@ -454,7 +422,7 @@ function App() {
       {/* メインコンテンツ */}
       <main className="p-4 space-y-4">
         {/* ========================================================================= */}
-        {/* TAB 1: 入力フォーム (収支・仕入れレシートOCR・銀行管理) */}
+        {/* TAB 1: 入力フォーム (収支・仕入れレシート画像・銀行管理) */}
         {/* ========================================================================= */}
         {activeTab === "input" && (
           <div className="space-y-4">
@@ -689,16 +657,13 @@ function App() {
                 </div>
               </div>
 
-              {/* 勘定科目（AI推測 + ドロップダウンで簡単修正） */}
+              {/* 勘定科目ドロップダウン */}
               {entryType !== "bank" && (
                 <div>
                   <div className="flex justify-between items-center mb-1">
                     <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
                       勘定科目 <span className="text-red-500">*</span>
                     </label>
-                    <span className="text-[11px] text-indigo-600 font-medium">
-                      AI推測からドロップダウンで変更可能
-                    </span>
                   </div>
                   {entryType === "income" ? (
                     <input
@@ -750,7 +715,7 @@ function App() {
                 </div>
               </div>
 
-              {/* 口座選択 & 摘要メモ */}
+              {/* 口座選択 & 摘要メモ (プルダウン付き) */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-bold text-slate-500 mb-1">
@@ -788,7 +753,7 @@ function App() {
                       className="w-full px-3 py-2 bg-indigo-50/80 border border-indigo-200 rounded-xl text-xs font-bold text-indigo-950 focus:bg-white focus:border-indigo-600 outline-none transition-all cursor-pointer shadow-xs"
                     >
                       <option value="">▼ プルダウンから品目・定型句を選択...</option>
-                      
+
                       {/* 現在選択中の勘定科目に適した定番品目 */}
                       <optgroup label={`📋 【${formData.category || '定番'}】のよく使う品目`}>
                         {((COMMON_DESCRIPTIONS[formData.category]) || COMMON_DESCRIPTIONS["消耗品費"]).map((item, idx) => (
@@ -796,7 +761,7 @@ function App() {
                         ))}
                       </optgroup>
 
-                      {/* 収入や一般的な定番候補 */}
+                      {/* その他一般的な定番候補 */}
                       <optgroup label="📌 その他・一般的な候補">
                         {[
                           "仕入れ商品一式",
@@ -1047,94 +1012,7 @@ function App() {
         )}
 
         {/* ========================================================================= */}
-        {/* TAB 3: Google カレンダー連携 */}
-        {/* ========================================================================= */}
-        {activeTab === "calendar" && (
-          <div className="space-y-4">
-            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm space-y-4">
-              <div className="flex items-center space-x-3">
-                <span className="text-3xl">📅</span>
-                <div>
-                  <h2 className="text-base font-bold text-slate-900">Google カレンダー 自動同期</h2>
-                  <p className="text-xs text-slate-500">1日の収支合計を非公開の終日イベントとして同期します</p>
-                </div>
-              </div>
-
-              <div className="bg-indigo-50 border border-indigo-100 p-3 rounded-xl text-xs text-indigo-900 space-y-1">
-                <p className="font-bold">✨ カレンダー登録イベントの仕様:</p>
-                <p>・<b>タイトル</b>: 【収支】収入: ¥48,200 / 支出: ¥14,300 (差引: +¥33,900)</p>
-                <p>・<b>説明</b>: Uber売上、Rocket Now売上、仕入高、消耗品費の内訳明細</p>
-                <p>・<b>公開設定</b>: 非公開 (Private) の終日イベントとしてプライバシー保護</p>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
-                <button
-                  type="button"
-                  disabled={syncing}
-                  onClick={() => handleCalendarSync("day", new Date().toISOString().slice(0, 10))}
-                  className="py-3 px-4 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl shadow-md text-sm transition-all flex items-center justify-center space-x-2"
-                >
-                  <span>📅 本日 ({new Date().toISOString().slice(5, 10)}) の収支を同期</span>
-                </button>
-                <button
-                  type="button"
-                  disabled={syncing}
-                  onClick={() => handleCalendarSync("month", currentMonth)}
-                  className="py-3 px-4 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-xl shadow-md text-sm transition-all flex items-center justify-center space-x-2"
-                >
-                  <span>📆 今月 ({currentMonth}) 分を一括同期</span>
-                </button>
-              </div>
-
-              {syncing && (
-                <div className="py-4 text-center text-xs text-slate-500 animate-pulse">
-                  カレンダー同期中...
-                </div>
-              )}
-
-              {/* 同期結果プレビュー */}
-              {syncStatus && (
-                <div className="mt-4 p-4 bg-slate-50 rounded-xl border border-slate-200 text-xs space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className="font-bold text-slate-800">
-                      {syncStatus.mode === "live" ? "🟢 Googleカレンダーに同期完了" : "ℹ️ カレンダー同期プレビュー"}
-                    </span>
-                    <span className="text-[10px] bg-slate-200 px-2 py-0.5 rounded-full font-bold">
-                      {syncStatus.mode === "live" ? syncStatus.action : "Preview"}
-                    </span>
-                  </div>
-
-                  {syncStatus.message && (
-                    <p className="text-slate-600 text-[11px] bg-amber-50 p-2 rounded border border-amber-200">
-                      {syncStatus.message}
-                    </p>
-                  )}
-
-                  {syncStatus.event && (
-                    <div className="bg-white p-3 rounded-lg border border-slate-200 space-y-1">
-                      <p className="font-extrabold text-indigo-900 text-sm">{syncStatus.event.summary}</p>
-                      <pre className="text-[11px] text-slate-600 whitespace-pre-wrap font-sans mt-1 bg-slate-50 p-2 rounded">
-                        {syncStatus.event.description}
-                      </pre>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-
-            {/* バッチ処理の案内 */}
-            <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm text-xs text-slate-600 space-y-2">
-              <h3 className="font-bold text-slate-800 text-sm">💡 自動バッチ処理について</h3>
-              <p>
-                付属のスクリプト <code className="bg-slate-100 px-1 py-0.5 rounded font-mono">scripts/sync_calendar.py</code> を
-                Windowsの「タスクスケジューラ」に登録することで、毎晩決まった時間に当日の収支を自動でGoogleカレンダーへ反映させることができます。
-              </p>
-            </div>
-          </div>
-        )}
-
-        {/* ========================================================================= */}
-        {/* TAB 4: エクスポート (Excel, PDF, MF CSV, 弥生 CSV) */}
+        {/* TAB 3: エクスポート (Excel, PDF, MF CSV, 弥生 CSV) */}
         {/* ========================================================================= */}
         {activeTab === "export" && (
           <div className="space-y-4">
@@ -1217,7 +1095,7 @@ function App() {
         )}
 
         {/* ========================================================================= */}
-        {/* TAB 5: 設定 */}
+        {/* TAB 4: 設定 */}
         {/* ========================================================================= */}
         {activeTab === "settings" && (
           <div className="space-y-4">
@@ -1329,4 +1207,3 @@ function App() {
 
 const root = ReactDOM.createRoot(document.getElementById("root"));
 root.render(<App />);
-

@@ -4,6 +4,7 @@ import uuid
 import shutil
 from datetime import datetime, date
 from typing import Optional, List, Dict, Any
+from urllib.parse import quote
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -82,7 +83,6 @@ def seed_sample_data_if_empty():
     conn.close()
 
     if count == 0:
-        today = date.today().strftime("%Y-%m-%d")
         curr_month = date.today().strftime("%Y-%m")
         d1 = f"{curr_month}-02"
         d2 = f"{curr_month}-05"
@@ -161,7 +161,6 @@ def seed_sample_data_if_empty():
         ]
         for s in samples:
             create_transaction(s)
-        print("Initial sample transactions seeded successfully.")
 
 
 @app.on_event("startup")
@@ -229,7 +228,7 @@ def monthly_summary(month: Optional[str] = None):
 
 
 # -----------------------------
-# 画像アップロード & 保存 API (ローカル完全保存)
+# 画像アップロード & 保存 API (ローカル安全保存・Google不要)
 # -----------------------------
 @app.post("/api/upload-receipt")
 async def upload_receipt(file: UploadFile = File(...)):
@@ -269,11 +268,10 @@ async def upload_receipt(file: UploadFile = File(...)):
 
 
 # -----------------------------
-# 日別収支集計 API (Googleカレンダー代替・ローカル計算)
+# 日別収支集計 API (Google不要・ローカル計算)
 # -----------------------------
 @app.post("/api/calendar/sync-day")
 def sync_day_calendar(req: SyncDayRequest):
-    # Google認証なしで安全に日計収支を返す
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("""
@@ -317,10 +315,8 @@ def sync_month_calendar(req: SyncMonthRequest):
     }
 
 
-from urllib.parse import quote
-
 # -----------------------------
-# エクスポート API
+# エクスポート API (Excel / PDF / MF CSV / 弥生 CSV)
 # -----------------------------
 @app.get("/api/export/excel")
 def download_excel(month: Optional[str] = None):

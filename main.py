@@ -16,4 +16,3 @@ if __name__ == "__main__":
     print(f" スマホ・タブレット（同一Wi-Fi内）: http://[PCのIPアドレス]:{port}")
     print("=" * 60)
     uvicorn.run("backend.app:app", host="0.0.0.0", port=port, reload=False)
-
