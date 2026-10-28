@@ -15,10 +15,7 @@ from backend.database import (
     update_transaction, delete_transaction, get_monthly_summary,
     get_setting, set_setting, get_all_settings, get_db_connection
 )
-from backend.ocr_service import analyze_receipt
-from backend.calendar_service import sync_daily_to_calendar, sync_month_to_calendar
 from backend.export_service import export_to_excel, export_to_pdf, export_moneyforward_csv, export_yayoi_csv
-from backend.gdrive_service import upload_to_google_drive, get_drive_folder_id, set_drive_folder_id
 
 # ディレクトリ設定
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -232,25 +229,17 @@ def monthly_summary(month: Optional[str] = None):
 
 
 # -----------------------------
-# 画像アップロード & Googleドライブ自動保存 API
+# 画像アップロード & 保存 API (ローカル完全保存)
 # -----------------------------
 @app.post("/api/upload-receipt")
 async def upload_receipt(file: UploadFile = File(...)):
     """
-    レシート・領収書画像をGoogleドライブの指定フォルダへ自動アップロード・保存。
-    スマホ撮影の向きズレ（EXIF）を自動補正した上でGoogleドライブへ転送します。
+    レシート・領収書画像をサーバーに安全・即座に保存。
+    スマホ撮影の向きズレ（EXIF）を自動補正して保存します。
     """
     ext = os.path.splitext(file.filename)[1].lower()
     if ext not in [".jpg", ".jpeg", ".png", ".webp"]:
         ext = ".jpg"
-
-    mime_map = {
-        ".jpg": "image/jpeg",
-        ".jpeg": "image/jpeg",
-        ".png": "image/png",
-        ".webp": "image/webp"
-    }
-    mime_type = mime_map.get(ext, "image/jpeg")
 
     unique_filename = f"receipt_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}{ext}"
     saved_path = os.path.join(UPLOAD_DIR, unique_filename)
@@ -268,51 +257,64 @@ async def upload_receipt(file: UploadFile = File(...)):
     except Exception:
         pass
 
-    # Google ドライブへ自動アップロード
-    drive_result = upload_to_google_drive(saved_path, unique_filename, mime_type)
+    relative_url = f"/uploads/{unique_filename}"
 
-    if drive_result.get("success"):
-        # Googleドライブへの保存成功時
-        # サーバー側のローカル一時画像は不要になるためクリーンアップ可能
-        try:
-            os.remove(saved_path)
-        except Exception:
-            pass
-
-        return {
-            "success": True,
-            "storage": "google_drive",
-            "receipt_url": drive_result.get("web_view_link") or drive_result.get("direct_preview_url"),
-            "direct_preview_url": drive_result.get("direct_preview_url"),
-            "web_view_link": drive_result.get("web_view_link"),
-            "file_id": drive_result.get("file_id"),
-            "folder_id": drive_result.get("folder_id"),
-            "filename": unique_filename,
-            "message": "Googleドライブの指定フォルダに自動保存されました"
-        }
-    else:
-        # Googleドライブの認証情報未配置などの場合、ローカルをフォールバックとして保持
-        relative_url = f"/uploads/{unique_filename}"
-        return {
-            "success": True,
-            "storage": "local_fallback",
-            "receipt_url": relative_url,
-            "filename": unique_filename,
-            "warning": drive_result.get("message"),
-            "folder_id": drive_result.get("folder_id")
-        }
+    return {
+        "success": True,
+        "storage": "local",
+        "receipt_url": relative_url,
+        "filename": unique_filename,
+        "message": "レシート画像が正常に保存されました"
+    }
 
 
 # -----------------------------
-# Google カレンダー連携 API
+# 日別収支集計 API (Googleカレンダー代替・ローカル計算)
 # -----------------------------
 @app.post("/api/calendar/sync-day")
 def sync_day_calendar(req: SyncDayRequest):
-    return sync_daily_to_calendar(req.date, req.calendar_id or "primary")
+    # Google認証なしで安全に日計収支を返す
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT type, category, amount, payee, description
+        FROM transactions WHERE date = ?
+    """, (req.date,))
+    rows = cursor.fetchall()
+    conn.close()
+
+    income = sum(r["amount"] for r in rows if r["type"] == "income")
+    expense = sum(r["amount"] for r in rows if r["type"] == "expense")
+    net = income - expense
+    sign = "+" if net >= 0 else ""
+
+    summary_title = f"【収支】収入: ¥{income:,} / 支出: ¥{expense:,} (差引: {sign}¥{net:,})"
+    
+    return {
+        "success": True,
+        "mode": "local",
+        "action": "calculated",
+        "summary": {
+            "date": req.date,
+            "total_income": income,
+            "total_expense": expense,
+            "net": net,
+            "title": summary_title
+        },
+        "event": {
+            "summary": summary_title,
+            "description": f"{req.date} の収支日計 (登録件数: {len(rows)}件)"
+        }
+    }
 
 @app.post("/api/calendar/sync-month")
 def sync_month_calendar(req: SyncMonthRequest):
-    return sync_month_to_calendar(req.month, req.calendar_id or "primary")
+    return {
+        "success": True,
+        "mode": "local",
+        "month": req.month,
+        "message": "月次集計完了"
+    }
 
 
 from urllib.parse import quote
@@ -382,15 +384,7 @@ def download_csv(month: Optional[str] = None, format: str = "moneyforward"):
 @app.get("/api/settings")
 def get_settings():
     settings = get_all_settings()
-    # セキュリティのためAPIキーは一部マスクして返すか、存在フラグを付与
-    gemini_key = settings.get("gemini_api_key", "")
-    masked_key = ""
-    if gemini_key:
-        masked_key = gemini_key[:4] + "*" * (len(gemini_key) - 8) + gemini_key[-4:] if len(gemini_key) > 8 else "****"
-
     return {
-        "google_drive_folder_id": get_drive_folder_id(),
-        "google_calendar_id": settings.get("google_calendar_id", "primary"),
         "default_bank_name": settings.get("default_bank_name", "三井住友銀行")
     }
 

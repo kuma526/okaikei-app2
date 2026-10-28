@@ -134,8 +134,7 @@ function App() {
 
   // 設定状態
   const [settings, setSettings] = useState({
-    google_drive_folder_id: "1qX_mCHjCEFKQoGfuoMrIxJvOZIpWibq8",
-    google_calendar_id: "primary"
+    default_bank_name: "三井住友銀行"
   });
 
   // レシート画像モーダル
@@ -261,11 +260,7 @@ function App() {
           ...prev,
           receipt_path: data.receipt_url
         }));
-        if (data.storage === "google_drive") {
-          showAlert("☁️ Googleドライブの指定フォルダに自動保存されました！");
-        } else {
-          showAlert("📸 レシート画像を添付・保存しました！");
-        }
+        showAlert("📸 レシート画像を添付・保存しました！");
       } else {
         showAlert("画像の保存に失敗しました", "error");
       }
@@ -382,18 +377,11 @@ function App() {
   const handleSaveSettings = async (e) => {
     e.preventDefault();
     try {
-      if (settings.google_drive_folder_id) {
+      if (settings.default_bank_name) {
         await fetch("/api/settings", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ key: "google_drive_folder_id", value: settings.google_drive_folder_id })
-        });
-      }
-      if (settings.google_calendar_id) {
-        await fetch("/api/settings", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ key: "google_calendar_id", value: settings.google_calendar_id })
+          body: JSON.stringify({ key: "default_bank_name", value: settings.default_bank_name })
         });
       }
       showAlert("設定を保存しました！");
@@ -614,8 +602,8 @@ function App() {
               </div>
             )}
 
-            {/* レシート・領収書 画像添付ゾーン (Googleドライブ自動アップロード) */}
-            <div className="bg-sky-50/70 border-2 border-dashed border-sky-300 rounded-2xl p-4 text-center relative overflow-hidden">
+            {/* レシート・領収書 画像添付ゾーン */}
+            <div className="bg-slate-50 border-2 border-dashed border-slate-300 rounded-2xl p-4 text-center relative overflow-hidden">
               <input
                 ref={fileInputRef}
                 type="file"
@@ -628,8 +616,8 @@ function App() {
 
               {uploadingImage ? (
                 <div className="py-4 space-y-2">
-                  <div className="animate-spin text-2xl mx-auto w-6 h-6 border-3 border-sky-600 border-t-transparent rounded-full"></div>
-                  <p className="text-xs font-bold text-sky-900">Googleドライブに転送・保存中...</p>
+                  <div className="animate-spin text-2xl mx-auto w-6 h-6 border-3 border-slate-600 border-t-transparent rounded-full"></div>
+                  <p className="text-xs font-bold text-slate-700">画像を保存中...</p>
                 </div>
               ) : previewImage ? (
                 <div className="space-y-2">
@@ -649,9 +637,9 @@ function App() {
                     </button>
                   </div>
                   <div className="flex items-center justify-center space-x-2">
-                    <span className="text-xs bg-sky-100 text-sky-800 font-bold px-2.5 py-1 rounded-full flex items-center space-x-1">
-                      <span>☁️</span>
-                      <span>Googleドライブ連携</span>
+                    <span className="text-xs bg-emerald-100 text-emerald-800 font-bold px-2.5 py-1 rounded-full flex items-center space-x-1">
+                      <span>✅</span>
+                      <span>レシート画像添付済み</span>
                     </span>
                     <label
                       htmlFor="receipt-file"
@@ -663,16 +651,16 @@ function App() {
                 </div>
               ) : (
                 <div className="py-2.5">
-                  <div className="text-2xl mb-1">☁️ 📸</div>
+                  <div className="text-2xl mb-1">📸</div>
                   <p className="text-sm font-bold text-slate-800">
                     レシート・領収書画像を添付
                   </p>
-                  <p className="text-xs text-sky-700 mt-0.5 mb-2.5 font-medium">
-                    撮影した写真はあなたのGoogleドライブ指定フォルダに自動保存されます
+                  <p className="text-xs text-slate-500 mt-0.5 mb-2.5">
+                    スマホのカメラで撮影または写真を選択して保存できます
                   </p>
                   <label
                     htmlFor="receipt-file"
-                    className="cursor-pointer inline-flex items-center space-x-2 bg-sky-600 hover:bg-sky-700 text-white font-bold px-4 py-2 rounded-xl shadow-sm text-xs transition-transform active:scale-95"
+                    className="cursor-pointer inline-flex items-center space-x-2 bg-slate-800 hover:bg-slate-900 text-white font-bold px-4 py-2 rounded-xl shadow-sm text-xs transition-transform active:scale-95"
                   >
                     <span>📷 カメラ撮影 / 写真を選択</span>
                   </label>
@@ -1240,51 +1228,25 @@ function App() {
               </h2>
 
               <form onSubmit={handleSaveSettings} className="space-y-4 text-xs">
-                {/* Google Drive Folder ID */}
-                <div>
-                  <div className="flex justify-between items-center mb-1">
-                    <label className="block font-bold text-slate-700">
-                      Google ドライブ 保存先フォルダ
-                    </label>
-                    <a
-                      href={`https://drive.google.com/drive/folders/${settings.google_drive_folder_id || '1qX_mCHjCEFKQoGfuoMrIxJvOZIpWibq8'}`}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="text-[11px] text-sky-600 hover:underline font-bold flex items-center space-x-1"
-                    >
-                      <span>📁 フォルダを開く ↗</span>
-                    </a>
-                  </div>
-                  <input
-                    type="text"
-                    value={settings.google_drive_folder_id || "1qX_mCHjCEFKQoGfuoMrIxJvOZIpWibq8"}
-                    onChange={(e) => setSettings({ ...settings, google_drive_folder_id: e.target.value })}
-                    className="w-full px-3 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-mono focus:bg-white outline-none"
-                  />
-                  <p className="text-[11px] text-slate-500 mt-1">
-                    アップロードされたレシート画像はこのGoogleドライブフォルダに自動保存されます。
-                  </p>
-                </div>
-
-                {/* Google Calendar ID */}
+                {/* 既定の口座 */}
                 <div>
                   <label className="block font-bold text-slate-700 mb-1">
-                    Google カレンダー ID
+                    既定の決済口座
                   </label>
-                  <input
-                    type="text"
-                    value={settings.google_calendar_id}
-                    onChange={(e) => setSettings({ ...settings, google_calendar_id: e.target.value })}
-                    className="w-full px-3 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm focus:bg-white outline-none"
-                  />
-                  <p className="text-[11px] text-slate-500 mt-1">
-                    通常は <code className="bg-slate-100 px-1 py-0.5 rounded">primary</code> （既定のメインカレンダー）のままでOKです。
-                  </p>
+                  <select
+                    value={settings.default_bank_name || "三井住友銀行"}
+                    onChange={(e) => setSettings({ ...settings, default_bank_name: e.target.value })}
+                    className="w-full px-3 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-medium focus:bg-white outline-none"
+                  >
+                    {BANKS.map(b => (
+                      <option key={b} value={b}>{b}</option>
+                    ))}
+                  </select>
                 </div>
 
                 <button
                   type="submit"
-                  className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl shadow-md text-sm transition-all"
+                  className="w-full py-3 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-xl shadow-md text-sm transition-all"
                 >
                   設定を保存する
                 </button>
@@ -1302,28 +1264,17 @@ function App() {
         >
           <div className="relative max-w-lg w-full max-h-[85vh] bg-white rounded-2xl overflow-hidden shadow-2xl p-4 text-center" onClick={(e) => e.stopPropagation()}>
             <div className="relative rounded-xl overflow-hidden bg-slate-100 flex items-center justify-center min-h-[200px] max-h-[70vh]">
-              {viewImageModal.includes("drive.google.com") ? (
-                <iframe
-                  src={viewImageModal.replace("/view", "/preview")}
-                  className="w-full h-[65vh] border-0 rounded-xl"
-                  title="Google Drive Receipt"
-                />
-              ) : (
-                <img src={viewImageModal} alt="Receipt" className="w-full max-h-[70vh] object-contain rounded-xl" />
-              )}
+              <img src={viewImageModal} alt="Receipt" className="w-full max-h-[70vh] object-contain rounded-xl" />
             </div>
 
             <div className="mt-3 flex items-center justify-center space-x-2">
-              {viewImageModal.includes("drive.google.com") && (
-                <a
-                  href={viewImageModal}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="px-4 py-2 bg-sky-600 hover:bg-sky-700 text-white text-xs font-bold rounded-full transition-colors flex items-center space-x-1"
-                >
-                  <span>☁️ Googleドライブで開く ↗</span>
-                </a>
-              )}
+              <a
+                href={viewImageModal}
+                download
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-full transition-colors flex items-center space-x-1"
+              >
+                <span>💾 画像ダウンロード</span>
+              </a>
               <button
                 onClick={() => setViewImageModal(null)}
                 className="px-6 py-2 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold rounded-full transition-colors"
@@ -1341,45 +1292,34 @@ function App() {
           <button
             type="button"
             onClick={() => setActiveTab("input")}
-            className={`flex flex-col items-center justify-center w-16 py-1 transition-all ${
+            className={`flex flex-col items-center justify-center w-20 py-1 transition-all ${
               activeTab === "input" ? "text-indigo-600 font-bold scale-105" : "text-slate-500 hover:text-slate-900"
             }`}
           >
             <span className="text-xl">✏️</span>
-            <span className="text-[10px] mt-0.5">記帳・入力</span>
+            <span className="text-[11px] mt-0.5">記帳・入力</span>
           </button>
 
           <button
             type="button"
             onClick={() => setActiveTab("list")}
-            className={`flex flex-col items-center justify-center w-16 py-1 transition-all ${
+            className={`flex flex-col items-center justify-center w-20 py-1 transition-all ${
               activeTab === "list" ? "text-indigo-600 font-bold scale-105" : "text-slate-500 hover:text-slate-900"
             }`}
           >
             <span className="text-xl">📊</span>
-            <span className="text-[10px] mt-0.5">一覧・集計</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setActiveTab("calendar")}
-            className={`flex flex-col items-center justify-center w-16 py-1 transition-all ${
-              activeTab === "calendar" ? "text-indigo-600 font-bold scale-105" : "text-slate-500 hover:text-slate-900"
-            }`}
-          >
-            <span className="text-xl">📅</span>
-            <span className="text-[10px] mt-0.5">カレンダー</span>
+            <span className="text-[11px] mt-0.5">一覧・集計</span>
           </button>
 
           <button
             type="button"
             onClick={() => setActiveTab("export")}
-            className={`flex flex-col items-center justify-center w-16 py-1 transition-all ${
+            className={`flex flex-col items-center justify-center w-20 py-1 transition-all ${
               activeTab === "export" ? "text-indigo-600 font-bold scale-105" : "text-slate-500 hover:text-slate-900"
             }`}
           >
             <span className="text-xl">📑</span>
-            <span className="text-[10px] mt-0.5">出力</span>
+            <span className="text-[11px] mt-0.5">帳票出力</span>
           </button>
         </div>
       </nav>
