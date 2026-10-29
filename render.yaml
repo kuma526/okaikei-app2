@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: kaikei-web-app
+    name: kantaro-ver1
     runtime: python
     plan: free
     buildCommand: pip install -r requirements.txt
