@@ -78,6 +78,8 @@ const COMMON_DESCRIPTIONS = {
     "住民票・印鑑証明書発行手数料"
   ],
   "売上高": [
+    "店舗レジ現金売上",
+    "店舗カード売上 (楽天ターミナル)",
     "第1週 配達売上振込",
     "第2週 配達売上振込",
     "第3週 配達売上振込",
@@ -99,8 +101,25 @@ const COMMON_DESCRIPTIONS = {
 // 銀行リスト
 const BANKS = ["三井住友銀行", "楽天銀行", "三菱UFJ銀行", "みずほ銀行", "ゆうちょ銀行", "PayPay銀行", "住信SBIネット銀行", "現金"];
 
+// 支出用決済・支払元リスト (カード決済、QRコード支払い追加)
+const EXPENSE_PAYMENT_METHODS = [
+  "現金",
+  "カード決済",
+  "QRコード支払い",
+  "三井住友銀行",
+  "楽天銀行",
+  "三菱UFJ銀行",
+  "みずほ銀行",
+  "ゆうちょ銀行",
+  "PayPay銀行",
+  "住信SBIネット銀行"
+];
+
+// 楽天ターミナル決済種別
+const RAKUTEN_PAYMENT_TYPES = ["カード", "QRコード", "電子マネー"];
+
 function App() {
-  const [activeTab, setActiveTab] = useState("input"); // 'input', 'list', 'calendar', 'export', 'settings'
+  const [activeTab, setActiveTab] = useState("input"); // 'input', 'list', 'export', 'settings'
   const [currentMonth, setCurrentMonth] = useState(new Date().toISOString().slice(0, 7)); // 'YYYY-MM'
   
   // トランザクション & 集計データ
@@ -111,7 +130,7 @@ function App() {
 
   // 入力フォームステート
   const [entryType, setEntryType] = useState("expense"); // 'income', 'expense', 'bank'
-  const [sourceType, setSourceType] = useState("purchase"); // 'purchase', 'bank_transfer', 'manual_expense', 'uber', 'rocket', 'manual_income', 'deposit', 'withdrawal'
+  const [sourceType, setSourceType] = useState("purchase"); // 'purchase', 'bank_transfer', 'manual_expense', 'store', 'uber', 'rocket', 'manual_income', 'deposit', 'withdrawal'
   const [formData, setFormData] = useState({
     date: new Date().toISOString().slice(0, 10),
     amount: "",
@@ -123,18 +142,21 @@ function App() {
     ocr_data: null
   });
 
+  // 店舗売上・決済方法ステート
+  const [storePaymentMethod, setStorePaymentMethod] = useState("cash"); // 'cash', 'rakuten_terminal'
+  const [rakutenPaymentType, setRakutenPaymentType] = useState("カード"); // 'カード', 'QRコード', '電子マネー'
+  const [cardFeeRate, setCardFeeRate] = useState("3.24"); // 手数料率 (%) デフォルト3.24%
+  const [enableFeeCalc, setEnableFeeCalc] = useState(true); // 手数料自動計算
+
   // 画像添付・アップロード状態
   const [uploadingImage, setUploadingImage] = useState(false);
   const [previewImage, setPreviewImage] = useState(null);
   const fileInputRef = useRef(null);
 
-  // カレンダー同期状態
-  const [syncStatus, setSyncStatus] = useState(null);
-  const [syncing, setSyncing] = useState(false);
-
   // 設定状態
   const [settings, setSettings] = useState({
-    default_bank_name: "三井住友銀行"
+    default_bank_name: "三井住友銀行",
+    card_fee_rate: "3.24"
   });
 
   // レシート画像モーダル
@@ -182,6 +204,9 @@ function App() {
       const res = await fetch("/api/settings");
       const data = await res.json();
       setSettings(prev => ({ ...prev, ...data }));
+      if (data.card_fee_rate) {
+        setCardFeeRate(data.card_fee_rate);
+      }
     } catch (e) {
       console.error(e);
     }
@@ -191,12 +216,14 @@ function App() {
   const handleTypeChange = (type) => {
     setEntryType(type);
     if (type === "income") {
-      setSourceType("uber");
+      setSourceType("store");
+      setStorePaymentMethod("cash");
       setFormData(prev => ({
         ...prev,
         category: "売上高",
-        payee: "Uber Eats",
-        bank_name: "楽天銀行"
+        payee: "店舗売上 (現金)",
+        description: "",
+        bank_name: "現金"
       }));
     } else if (type === "expense") {
       setSourceType("purchase");
@@ -204,6 +231,7 @@ function App() {
         ...prev,
         category: "仕入高",
         payee: "",
+        description: "",
         bank_name: "現金"
       }));
     } else if (type === "bank") {
@@ -212,6 +240,7 @@ function App() {
         ...prev,
         category: "事業主借",
         payee: "手元現金入金",
+        description: "",
         bank_name: "三井住友銀行"
       }));
     }
@@ -220,7 +249,15 @@ function App() {
   // ソース種別切り替え
   const handleSourceTypeChange = (st) => {
     setSourceType(st);
-    if (st === "uber") {
+    if (st === "store") {
+      const isCash = storePaymentMethod === "cash";
+      setFormData(prev => ({
+        ...prev,
+        category: "売上高",
+        payee: isCash ? "店舗売上 (現金)" : "店舗売上 (楽天ターミナル)",
+        bank_name: isCash ? "現金" : "楽天ターミナル"
+      }));
+    } else if (st === "uber") {
       setFormData(prev => ({ ...prev, category: "売上高", payee: "Uber Eats (配達売上)", bank_name: "楽天銀行" }));
     } else if (st === "rocket") {
       setFormData(prev => ({ ...prev, category: "売上高", payee: "Rocket Now (デリバリー売上)", bank_name: "三井住友銀行" }));
@@ -237,7 +274,37 @@ function App() {
     }
   };
 
-  // ファイルアップロード（即座に保存）
+  // 店舗売上の決済方法切り替え
+  const handleStorePaymentMethodChange = (method) => {
+    setStorePaymentMethod(method);
+    if (method === "cash") {
+      setFormData(prev => ({
+        ...prev,
+        payee: "店舗売上 (現金)",
+        bank_name: "現金"
+      }));
+    } else {
+      setFormData(prev => ({
+        ...prev,
+        payee: "店舗売上 (楽天ターミナル)",
+        bank_name: "楽天ターミナル"
+      }));
+    }
+  };
+
+  // カード・振込の手数料リアルタイム自動計算
+  const feeCalculation = useMemo(() => {
+    const gross = parseInt(formData.amount, 10) || 0;
+    const rate = parseFloat(cardFeeRate) || 0;
+    if (gross <= 0 || rate <= 0) {
+      return { gross: 0, rate: 0, fee: 0, net: 0 };
+    }
+    const fee = Math.round(gross * (rate / 100));
+    const net = gross - fee;
+    return { gross, rate, fee, net };
+  }, [formData.amount, cardFeeRate]);
+
+  // ファイルアップロード（即時サーバー保存）
   const handleFileUpload = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -282,6 +349,32 @@ function App() {
 
     setLoading(true);
     try {
+      let finalDescription = formData.description ? formData.description.trim() : "";
+      let finalOcrData = formData.ocr_data ? (typeof formData.ocr_data === "object" ? { ...formData.ocr_data } : {}) : {};
+
+      // カード売上（楽天ターミナル、または手数料計算有効時）の内訳を自動反映・記録
+      const isRakutenTerminal = (entryType === "income" && sourceType === "store" && storePaymentMethod === "rakuten_terminal");
+      const shouldCalcCardFee = isRakutenTerminal || (entryType === "income" && enableFeeCalc && feeCalculation.gross > 0);
+
+      if (shouldCalcCardFee && feeCalculation.gross > 0) {
+        const pType = isRakutenTerminal ? rakutenPaymentType : "カード";
+        const breakdownMemo = `【${pType}売上内訳】総額: ¥${feeCalculation.gross.toLocaleString()} / 手数料(${feeCalculation.rate}%): -¥${feeCalculation.fee.toLocaleString()} / 振込受取額: ¥${feeCalculation.net.toLocaleString()}`;
+
+        if (!finalDescription) {
+          finalDescription = breakdownMemo;
+        } else if (!finalDescription.includes("振込受取額:")) {
+          finalDescription = `${finalDescription} ${breakdownMemo}`;
+        }
+
+        finalOcrData.fee_calculation = {
+          gross_amount: feeCalculation.gross,
+          fee_rate: feeCalculation.rate,
+          fee_amount: feeCalculation.fee,
+          net_amount: feeCalculation.net,
+          payment_type: pType
+        };
+      }
+
       const payload = {
         date: formData.date,
         type: entryType,
@@ -289,10 +382,10 @@ function App() {
         category: formData.category,
         amount: parseInt(formData.amount, 10),
         payee: formData.payee,
-        description: formData.description,
+        description: finalDescription,
         bank_name: formData.bank_name,
         receipt_path: formData.receipt_path,
-        ocr_data: formData.ocr_data
+        ocr_data: Object.keys(finalOcrData).length > 0 ? finalOcrData : null
       };
 
       const res = await fetch("/api/transactions", {
@@ -305,13 +398,20 @@ function App() {
       if (res.ok) {
         showAlert("✅ 取引を正常に記録しました！");
         // フォーム初期化
+        const defaultBank = entryType === "income" 
+          ? (sourceType === "store" ? (storePaymentMethod === "cash" ? "現金" : "楽天ターミナル") : (sourceType === "uber" ? "楽天銀行" : (sourceType === "rocket" ? "三井住友銀行" : "現金")))
+          : "現金";
+        const defaultPayee = entryType === "income"
+          ? (sourceType === "store" ? (storePaymentMethod === "cash" ? "店舗売上 (現金)" : "店舗売上 (楽天ターミナル)") : (sourceType === "uber" ? "Uber Eats (配達売上)" : (sourceType === "rocket" ? "Rocket Now (デリバリー売上)" : "")))
+          : "";
+
         setFormData({
           date: new Date().toISOString().slice(0, 10),
           amount: "",
           category: entryType === "income" ? "売上高" : "仕入高",
-          payee: "",
+          payee: defaultPayee,
           description: "",
-          bank_name: "現金",
+          bank_name: defaultBank,
           receipt_path: "",
           ocr_data: null
         });
@@ -345,34 +445,6 @@ function App() {
     }
   };
 
-  // Googleカレンダー同期実行
-  const handleCalendarSync = async (mode, targetVal) => {
-    setSyncing(true);
-    setSyncStatus(null);
-    try {
-      let endpoint = "/api/calendar/sync-day";
-      let body = { date: targetVal, calendar_id: settings.google_calendar_id };
-
-      if (mode === "month") {
-        endpoint = "/api/calendar/sync-month";
-        body = { month: targetVal, calendar_id: settings.google_calendar_id };
-      }
-
-      const res = await fetch(endpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body)
-      });
-      const data = await res.json();
-      setSyncStatus(data);
-      showAlert("Googleカレンダー同期処理が完了しました！");
-    } catch (e) {
-      showAlert("カレンダー同期中にエラーが発生しました", "error");
-    } finally {
-      setSyncing(false);
-    }
-  };
-
   // 設定保存
   const handleSaveSettings = async (e) => {
     e.preventDefault();
@@ -382,6 +454,13 @@ function App() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ key: "default_bank_name", value: settings.default_bank_name })
+        });
+      }
+      if (cardFeeRate) {
+        await fetch("/api/settings", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ key: "card_fee_rate", value: cardFeeRate })
         });
       }
       showAlert("設定を保存しました！");
@@ -395,6 +474,7 @@ function App() {
   const filteredTransactions = useMemo(() => {
     return transactions.filter(t => {
       if (filterType !== "all") {
+        if (filterType === "store" && t.source_type !== "store") return false;
         if (filterType === "uber" && t.source_type !== "uber") return false;
         if (filterType === "rocket" && t.source_type !== "rocket") return false;
         if (filterType === "purchase" && t.source_type !== "purchase") return false;
@@ -429,8 +509,8 @@ function App() {
           <div className="flex items-center space-x-2">
             <span className="text-xl">📊</span>
             <div>
-              <h1 className="text-lg font-bold leading-tight">個人事業主 出納帳</h1>
-              <p className="text-xs text-slate-400">Uber / Rocket Now / 仕入れ / 写真添付</p>
+              <h1 className="text-lg font-bold leading-tight">勘太郎 ver. 1.0</h1>
+              <p className="text-xs text-slate-400">個人事業主 出納帳 / 店舗売上 / Uber / Rocket Now</p>
             </div>
           </div>
           <div className="flex items-center space-x-2">
@@ -454,7 +534,7 @@ function App() {
       {/* メインコンテンツ */}
       <main className="p-4 space-y-4">
         {/* ========================================================================= */}
-        {/* TAB 1: 入力フォーム (収支・仕入れレシートOCR・銀行管理) */}
+        {/* TAB 1: 入力フォーム (収支・仕入れレシート画像・銀行管理) */}
         {/* ========================================================================= */}
         {activeTab === "input" && (
           <div className="space-y-4">
@@ -498,42 +578,96 @@ function App() {
               </button>
             </div>
 
-            {/* サブタイプ・クイック切替 */}
+            {/* サブタイプ・クイック切替（1. 店舗売上、2. UBER振込、3. ROCKET NOW振込、4. その他売上） */}
             {entryType === "income" && (
-              <div className="flex gap-2 overflow-x-auto pb-1 no-scrollbar">
-                <button
-                  type="button"
-                  onClick={() => handleSourceTypeChange("uber")}
-                  className={`flex-1 min-w-[100px] py-2 px-3 rounded-lg text-xs font-bold border transition-all text-center ${
-                    sourceType === "uber"
-                      ? "bg-emerald-50 border-emerald-500 text-emerald-800 shadow-sm"
-                      : "bg-white border-slate-200 text-slate-600"
-                  }`}
-                >
-                  🛵 Uber 振込
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleSourceTypeChange("rocket")}
-                  className={`flex-1 min-w-[100px] py-2 px-3 rounded-lg text-xs font-bold border transition-all text-center ${
-                    sourceType === "rocket"
-                      ? "bg-emerald-50 border-emerald-500 text-emerald-800 shadow-sm"
-                      : "bg-white border-slate-200 text-slate-600"
-                  }`}
-                >
-                  ⚡ Rocket Now 振込
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleSourceTypeChange("manual_income")}
-                  className={`flex-1 min-w-[100px] py-2 px-3 rounded-lg text-xs font-bold border transition-all text-center ${
-                    sourceType === "manual_income"
-                      ? "bg-emerald-50 border-emerald-500 text-emerald-800 shadow-sm"
-                      : "bg-white border-slate-200 text-slate-600"
-                  }`}
-                >
-                  ✏️ その他売上
-                </button>
+              <div className="space-y-2">
+                <div className="flex gap-2 overflow-x-auto pb-1 no-scrollbar">
+                  <button
+                    type="button"
+                    onClick={() => handleSourceTypeChange("store")}
+                    className={`flex-1 min-w-[105px] py-2 px-3 rounded-lg text-xs font-bold border transition-all text-center ${
+                      sourceType === "store"
+                        ? "bg-emerald-50 border-emerald-500 text-emerald-800 shadow-sm ring-1 ring-emerald-400"
+                        : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
+                    }`}
+                  >
+                    🏪 1. 店舗売上
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleSourceTypeChange("uber")}
+                    className={`flex-1 min-w-[105px] py-2 px-3 rounded-lg text-xs font-bold border transition-all text-center ${
+                      sourceType === "uber"
+                        ? "bg-emerald-50 border-emerald-500 text-emerald-800 shadow-sm ring-1 ring-emerald-400"
+                        : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
+                    }`}
+                  >
+                    🛵 2. UBER振込
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleSourceTypeChange("rocket")}
+                    className={`flex-1 min-w-[125px] py-2 px-3 rounded-lg text-xs font-bold border transition-all text-center ${
+                      sourceType === "rocket"
+                        ? "bg-emerald-50 border-emerald-500 text-emerald-800 shadow-sm ring-1 ring-emerald-400"
+                        : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
+                    }`}
+                  >
+                    ⚡ 3. ROCKET NOW振込
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleSourceTypeChange("manual_income")}
+                    className={`flex-1 min-w-[100px] py-2 px-3 rounded-lg text-xs font-bold border transition-all text-center ${
+                      sourceType === "manual_income"
+                        ? "bg-emerald-50 border-emerald-500 text-emerald-800 shadow-sm ring-1 ring-emerald-400"
+                        : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
+                    }`}
+                  >
+                    ✏️ その他売上
+                  </button>
+                </div>
+
+                {/* 店舗売上時の決済方法選択（現金 vs 楽天ターミナル） */}
+                {sourceType === "store" && (
+                  <div className="bg-emerald-50/70 border border-emerald-200 rounded-xl p-2.5">
+                    <div className="flex items-center justify-between mb-1.5 px-0.5">
+                      <span className="text-xs font-bold text-emerald-950 flex items-center gap-1">
+                        <span>💳</span>
+                        <span>店舗売上の決済方法</span>
+                      </span>
+                      <span className="text-[11px] text-emerald-700">
+                        {storePaymentMethod === "cash" ? "直接入力メモ" : "決済種別・手数料自動計算"}
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleStorePaymentMethodChange("cash")}
+                        className={`py-2 px-3 rounded-lg text-xs font-bold border transition-all flex items-center justify-center space-x-1.5 ${
+                          storePaymentMethod === "cash"
+                            ? "bg-emerald-600 text-white border-emerald-600 shadow-sm"
+                            : "bg-white text-slate-700 border-emerald-200 hover:bg-emerald-50/50"
+                        }`}
+                      >
+                        <span>💵</span>
+                        <span>現金売上</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleStorePaymentMethodChange("rakuten_terminal")}
+                        className={`py-2 px-3 rounded-lg text-xs font-bold border transition-all flex items-center justify-center space-x-1.5 ${
+                          storePaymentMethod === "rakuten_terminal"
+                            ? "bg-rose-600 text-white border-rose-600 shadow-sm"
+                            : "bg-white text-slate-700 border-emerald-200 hover:bg-rose-50/50"
+                        }`}
+                      >
+                        <span>🔴</span>
+                        <span>楽天ターミナル</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
@@ -673,7 +807,9 @@ function App() {
               {/* 金額入力（大きく見やすく） */}
               <div>
                 <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
-                  金額 (円) <span className="text-red-500">*</span>
+                  {entryType === "income" && sourceType === "store" && storePaymentMethod === "rakuten_terminal" 
+                    ? "売上総額 (円)" 
+                    : "金額 (円)"} <span className="text-red-500">*</span>
                 </label>
                 <div className="relative">
                   <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-2xl font-bold text-slate-400">¥</span>
@@ -689,16 +825,82 @@ function App() {
                 </div>
               </div>
 
-              {/* 勘定科目（AI推測 + ドロップダウンで簡単修正） */}
+              {/* カード売上・決済手数料の自動計算カード（楽天ターミナル時） */}
+              {entryType === "income" && ((sourceType === "store" && storePaymentMethod === "rakuten_terminal") || (sourceType !== "store" && enableFeeCalc)) && (
+                <div className="bg-amber-50/80 border border-amber-300 rounded-xl p-3 space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-amber-900 flex items-center gap-1">
+                      <span>🧮</span>
+                      <span>決済手数料の自動計算 (内訳記録)</span>
+                    </span>
+                    <div className="flex items-center space-x-1.5">
+                      <span className="text-[11px] text-slate-600 font-medium">手数料率:</span>
+                      <div className="flex items-center bg-white border border-amber-300 rounded-lg px-2 py-0.5">
+                        <input
+                          type="number"
+                          step="0.01"
+                          value={cardFeeRate}
+                          onChange={(e) => setCardFeeRate(e.target.value)}
+                          className="w-12 text-xs font-bold text-slate-800 text-right outline-none"
+                        />
+                        <span className="text-xs font-bold text-slate-500 ml-0.5">%</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* レート切り替えクイックボタン */}
+                  <div className="flex items-center gap-1.5 text-[11px]">
+                    <span className="text-slate-500 font-medium">プリセット:</span>
+                    {["3.24", "3.0", "3.25"].map(r => (
+                      <button
+                        key={r}
+                        type="button"
+                        onClick={() => setCardFeeRate(r)}
+                        className={`px-2 py-0.5 rounded-md font-bold transition-all ${
+                          cardFeeRate === r 
+                            ? "bg-amber-600 text-white shadow-2xs" 
+                            : "bg-white text-amber-800 border border-amber-200 hover:bg-amber-100/50"
+                        }`}
+                      >
+                        {r}%
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* 内訳自動反映プレビュー */}
+                  <div className="bg-white rounded-lg p-2.5 border border-amber-200 text-xs space-y-1.5 shadow-2xs">
+                    <div className="flex justify-between items-center text-slate-600">
+                      <span>売上総額:</span>
+                      <span className="font-bold text-slate-800">
+                        ¥{feeCalculation.gross.toLocaleString()}
+                      </span>
+                    </div>
+                    <div className="flex justify-between items-center text-rose-600">
+                      <span>引かれた手数料 ({feeCalculation.rate}%):</span>
+                      <span className="font-bold">
+                        -¥{feeCalculation.fee.toLocaleString()}
+                      </span>
+                    </div>
+                    <div className="flex justify-between items-center text-emerald-800 font-extrabold text-sm pt-1.5 border-t border-slate-100">
+                      <span>実際の振込・受取額:</span>
+                      <span>
+                        ¥{feeCalculation.net.toLocaleString()}
+                      </span>
+                    </div>
+                  </div>
+                  <p className="text-[10px] text-amber-800 font-medium leading-tight">
+                    ※ 登録時に売上総額・引かれた手数料・実際の振込受取額の内訳が出納帳およびメモ欄に自動記録されます。
+                  </p>
+                </div>
+              )}
+
+              {/* 勘定科目ドロップダウン */}
               {entryType !== "bank" && (
                 <div>
                   <div className="flex justify-between items-center mb-1">
                     <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
                       勘定科目 <span className="text-red-500">*</span>
                     </label>
-                    <span className="text-[11px] text-indigo-600 font-medium">
-                      AI推測からドロップダウンで変更可能
-                    </span>
                   </div>
                   {entryType === "income" ? (
                     <input
@@ -742,7 +944,7 @@ function App() {
                   </label>
                   <input
                     type="text"
-                    placeholder={entryType === "income" ? "Uber / Rocket Now" : "セブンイレブン、卸問屋など"}
+                    placeholder={entryType === "income" ? (sourceType === "store" ? "店舗レジ売上" : "Uber / Rocket Now") : "セブンイレブン、卸問屋など"}
                     value={formData.payee}
                     onChange={(e) => setFormData({ ...formData, payee: e.target.value })}
                     className="w-full px-3 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-medium focus:bg-white focus:border-indigo-600 outline-none"
@@ -752,75 +954,159 @@ function App() {
 
               {/* 口座選択 & 摘要メモ */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {/* 決済・口座選択 */}
                 <div>
                   <label className="block text-xs font-bold text-slate-500 mb-1">
-                    {entryType === "income" ? "振込入金先 口座" : (entryType === "expense" ? "決済・支払元" : "対象銀行口座")}
+                    {entryType === "income" 
+                      ? (sourceType === "store" ? "決済手段 / 口座" : "振込入金先 口座") 
+                      : (entryType === "expense" ? "決済・支払元" : "対象銀行口座")}
                   </label>
-                  <select
-                    value={formData.bank_name}
-                    onChange={(e) => setFormData({ ...formData, bank_name: e.target.value })}
-                    className="w-full px-3 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-medium focus:bg-white focus:border-indigo-600 outline-none"
-                  >
-                    {BANKS.map(b => (
-                      <option key={b} value={b}>{b}</option>
-                    ))}
-                  </select>
+                  {entryType === "expense" ? (
+                    /* 仕入れ・支出の決済・支払元（カード決済、QRコード支払いを追加） */
+                    <select
+                      value={formData.bank_name}
+                      onChange={(e) => setFormData({ ...formData, bank_name: e.target.value })}
+                      className="w-full px-3 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-medium focus:bg-white focus:border-indigo-600 outline-none"
+                    >
+                      {EXPENSE_PAYMENT_METHODS.map(m => (
+                        <option key={m} value={m}>{m}</option>
+                      ))}
+                    </select>
+                  ) : entryType === "income" && sourceType === "store" ? (
+                    <select
+                      value={formData.bank_name}
+                      onChange={(e) => setFormData({ ...formData, bank_name: e.target.value })}
+                      className="w-full px-3 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-medium focus:bg-white focus:border-indigo-600 outline-none"
+                    >
+                      <option value="現金">現金 (手元レジ)</option>
+                      <option value="楽天ターミナル">楽天ターミナル</option>
+                      {BANKS.filter(b => b !== "現金").map(b => (
+                        <option key={b} value={b}>{b}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <select
+                      value={formData.bank_name}
+                      onChange={(e) => setFormData({ ...formData, bank_name: e.target.value })}
+                      className="w-full px-3 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-medium focus:bg-white focus:border-indigo-600 outline-none"
+                    >
+                      {BANKS.map(b => (
+                        <option key={b} value={b}>{b}</option>
+                      ))}
+                    </select>
+                  )}
                 </div>
 
+                {/* 摘要・メモ欄 */}
                 <div>
-                  <div className="flex justify-between items-center mb-1">
-                    <label className="block text-xs font-bold text-slate-500">
-                      品目・摘要メモ
-                    </label>
-                    <span className="text-[11px] text-indigo-600 font-bold">
-                      ▼ プルダウン選択可
-                    </span>
-                  </div>
-                  <div className="space-y-1.5">
-                    {/* プルダウン選択 */}
-                    <select
-                      value=""
-                      onChange={(e) => {
-                        if (e.target.value) {
-                          setFormData(prev => ({ ...prev, description: e.target.value }));
-                        }
-                      }}
-                      className="w-full px-3 py-2 bg-indigo-50/80 border border-indigo-200 rounded-xl text-xs font-bold text-indigo-950 focus:bg-white focus:border-indigo-600 outline-none transition-all cursor-pointer shadow-xs"
-                    >
-                      <option value="">▼ プルダウンから品目・定型句を選択...</option>
-                      
-                      {/* 現在選択中の勘定科目に適した定番品目 */}
-                      <optgroup label={`📋 【${formData.category || '定番'}】のよく使う品目`}>
-                        {((COMMON_DESCRIPTIONS[formData.category]) || COMMON_DESCRIPTIONS["消耗品費"]).map((item, idx) => (
-                          <option key={`cat-${idx}`} value={item}>{item}</option>
-                        ))}
-                      </optgroup>
+                  {/* ケース1: 店舗売上・現金売上選択時（プルダウン削除、テキスト直接入力のみ） */}
+                  {entryType === "income" && sourceType === "store" && storePaymentMethod === "cash" ? (
+                    <div>
+                      <div className="flex justify-between items-center mb-1">
+                        <label className="block text-xs font-bold text-slate-500">
+                          メモ・摘要 (自由入力)
+                        </label>
+                        <span className="text-[11px] text-slate-400">
+                          直接入力のみ
+                        </span>
+                      </div>
+                      <input
+                        type="text"
+                        placeholder="店頭レジ現金売上、ランチ売上など"
+                        value={formData.description}
+                        onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+                        className="w-full px-3 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-medium focus:bg-white focus:border-indigo-600 outline-none transition-all"
+                      />
+                    </div>
+                  ) : entryType === "income" && sourceType === "store" && storePaymentMethod === "rakuten_terminal" ? (
+                    /* ケース2: 店舗売上・楽天ターミナル選択時（決済種別プルダウンメモ ＋ 直接入力） */
+                    <div>
+                      <div className="flex justify-between items-center mb-1">
+                        <label className="block text-xs font-bold text-slate-500">
+                          決済種別・メモ
+                        </label>
+                        <span className="text-[11px] text-rose-600 font-bold">
+                          ▼ 決済種別プルダウン
+                        </span>
+                      </div>
+                      <div className="space-y-1.5">
+                        <select
+                          value={rakutenPaymentType}
+                          onChange={(e) => setRakutenPaymentType(e.target.value)}
+                          className="w-full px-3 py-2 bg-rose-50 border border-rose-200 rounded-xl text-xs font-bold text-rose-950 focus:bg-white focus:border-rose-600 outline-none transition-all cursor-pointer shadow-xs"
+                        >
+                          {RAKUTEN_PAYMENT_TYPES.map(t => (
+                            <option key={t} value={t}>💳 決済種別: {t}</option>
+                          ))}
+                        </select>
 
-                      {/* 収入や一般的な定番候補 */}
-                      <optgroup label="📌 その他・一般的な候補">
-                        {[
-                          "仕入れ商品一式",
-                          "配達車両 ガソリン給油",
-                          "文房具・事務用品一式",
-                          "業務連絡用 スマホ通信料",
-                          "第1週 配達売上振込",
-                          "他行あて電信振込手数料",
-                          "諸雑費・手数料"
-                        ].map((item, idx) => (
-                          <option key={`gen-${idx}`} value={item}>{item}</option>
-                        ))}
-                      </optgroup>
-                    </select>
+                        <input
+                          type="text"
+                          placeholder="補足メモ (任意・直接入力)"
+                          value={formData.description}
+                          onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+                          className="w-full px-3 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-medium focus:bg-white focus:border-indigo-600 outline-none transition-all"
+                        />
+                      </div>
+                    </div>
+                  ) : (
+                    /* ケース3: その他の支出・通常収入（定型プルダウン ＋ 直接入力） */
+                    <div>
+                      <div className="flex justify-between items-center mb-1">
+                        <label className="block text-xs font-bold text-slate-500">
+                          品目・摘要メモ
+                        </label>
+                        <span className="text-[11px] text-indigo-600 font-bold">
+                          ▼ プルダウン選択可
+                        </span>
+                      </div>
+                      <div className="space-y-1.5">
+                        {/* プルダウン選択 */}
+                        <select
+                          value=""
+                          onChange={(e) => {
+                            if (e.target.value) {
+                              setFormData(prev => ({ ...prev, description: e.target.value }));
+                            }
+                          }}
+                          className="w-full px-3 py-2 bg-indigo-50/80 border border-indigo-200 rounded-xl text-xs font-bold text-indigo-950 focus:bg-white focus:border-indigo-600 outline-none transition-all cursor-pointer shadow-xs"
+                        >
+                          <option value="">▼ プルダウンから品目・定型句を選択...</option>
 
-                    {/* テキスト入力（自由編集・追記） */}
-                    <input
-                      type="text"
-                      placeholder="上のプルダウンから選択、または直接入力・追記"
-                      value={formData.description}
-                      onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-                      className="w-full px-3 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-medium focus:bg-white focus:border-indigo-600 outline-none transition-all"
-                    />
-                  </div>
+                          {/* 現在選択中の勘定科目に適した定番品目 */}
+                          <optgroup label={`📋 【${formData.category || '定番'}】のよく使う品目`}>
+                            {((COMMON_DESCRIPTIONS[formData.category]) || COMMON_DESCRIPTIONS["消耗品費"]).map((item, idx) => (
+                              <option key={`cat-${idx}`} value={item}>{item}</option>
+                            ))}
+                          </optgroup>
+
+                          {/* その他一般的な定番候補 */}
+                          <optgroup label="📌 その他・一般的な候補">
+                            {[
+                              "仕入れ商品一式",
+                              "配達車両 ガソリン給油",
+                              "文房具・事務用品一式",
+                              "業務連絡用 スマホ通信料",
+                              "第1週 配達売上振込",
+                              "他行あて電信振込手数料",
+                              "諸雑費・手数料"
+                            ].map((item, idx) => (
+                              <option key={`gen-${idx}`} value={item}>{item}</option>
+                            ))}
+                          </optgroup>
+                        </select>
+
+                        {/* テキスト入力（自由編集・追記） */}
+                        <input
+                          type="text"
+                          placeholder="上のプルダウンから選択、または直接入力・追記"
+                          value={formData.description}
+                          onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+                          className="w-full px-3 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-medium focus:bg-white focus:border-indigo-600 outline-none transition-all"
+                        />
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -872,11 +1158,20 @@ function App() {
               </div>
             )}
 
-            {/* Uber & Rocket Now 振込サマリー */}
+            {/* 売上ソース別サマリー (店舗売上、Uber、Rocket Now、銀行) */}
             {summary && summary.income_by_source && (
-              <div className="bg-white p-3 rounded-2xl border border-slate-200 shadow-sm flex items-center justify-between text-xs">
-                <div className="flex items-center space-x-2">
-                  <span className="text-lg">🛵</span>
+              <div className="bg-white p-3 rounded-2xl border border-slate-200 shadow-sm grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+                <div className="flex items-center space-x-2 p-1">
+                  <span className="text-xl">🏪</span>
+                  <div>
+                    <p className="text-slate-500 font-medium">店舗売上</p>
+                    <p className="font-extrabold text-slate-800 text-sm">
+                      ¥{(summary.income_by_source.store?.total || 0).toLocaleString()}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center space-x-2 p-1">
+                  <span className="text-xl">🛵</span>
                   <div>
                     <p className="text-slate-500 font-medium">Uber 売上</p>
                     <p className="font-extrabold text-slate-800 text-sm">
@@ -884,9 +1179,8 @@ function App() {
                     </p>
                   </div>
                 </div>
-                <div className="h-8 w-px bg-slate-200"></div>
-                <div className="flex items-center space-x-2">
-                  <span className="text-lg">⚡</span>
+                <div className="flex items-center space-x-2 p-1">
+                  <span className="text-xl">⚡</span>
                   <div>
                     <p className="text-slate-500 font-medium">Rocket Now 売上</p>
                     <p className="font-extrabold text-slate-800 text-sm">
@@ -894,9 +1188,8 @@ function App() {
                     </p>
                   </div>
                 </div>
-                <div className="h-8 w-px bg-slate-200"></div>
-                <div className="flex items-center space-x-2">
-                  <span className="text-lg">🏦</span>
+                <div className="flex items-center space-x-2 p-1">
+                  <span className="text-xl">🏦</span>
                   <div>
                     <p className="text-slate-500 font-medium">銀行預金純増</p>
                     <p className="font-extrabold text-slate-800 text-sm">
@@ -932,6 +1225,7 @@ function App() {
                 {[
                   { id: "all", label: "全て" },
                   { id: "income", label: "💰 収入のみ" },
+                  { id: "store", label: "🏪 店舗売上" },
                   { id: "uber", label: "🛵 Uber" },
                   { id: "rocket", label: "⚡ Rocket Now" },
                   { id: "expense", label: "💸 支出のみ" },
@@ -980,12 +1274,13 @@ function App() {
                       {/* 種別アイコン */}
                       <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-bold text-base shrink-0 ${
                         t.type === "income" 
-                          ? (t.source_type === "uber" ? "bg-emerald-100 text-emerald-700" : "bg-emerald-100 text-emerald-700")
+                          ? (t.source_type === "store" ? "bg-emerald-100 text-emerald-800" : (t.source_type === "uber" ? "bg-emerald-100 text-emerald-700" : "bg-emerald-100 text-emerald-700"))
                           : t.type === "expense"
                             ? (t.source_type === "purchase" ? "bg-amber-100 text-amber-700" : "bg-rose-100 text-rose-700")
                             : "bg-blue-100 text-blue-700"
                       }`}>
-                        {t.source_type === "uber" ? "🛵" : 
+                        {t.source_type === "store" ? "🏪" :
+                         t.source_type === "uber" ? "🛵" : 
                          t.source_type === "rocket" ? "⚡" : 
                          t.source_type === "purchase" ? "📦" : 
                          t.type === "income" ? "💰" : 
@@ -993,7 +1288,7 @@ function App() {
                       </div>
 
                       <div className="min-w-0">
-                        <div className="flex items-center space-x-1.5">
+                        <div className="flex items-center space-x-1.5 flex-wrap gap-y-0.5">
                           <span className="text-[11px] font-bold text-slate-400">{t.date}</span>
                           <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-bold ${
                             t.type === "income" ? "bg-emerald-100 text-emerald-800" :
@@ -1001,6 +1296,11 @@ function App() {
                           }`}>
                             {t.category}
                           </span>
+                          {t.bank_name && (
+                            <span className="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded-md font-medium">
+                              {t.bank_name}
+                            </span>
+                          )}
                           {t.receipt_path && (
                             <button
                               type="button"
@@ -1019,6 +1319,17 @@ function App() {
                           <p className="text-xs text-slate-500 truncate">
                             {t.description}
                           </p>
+                        )}
+                        {/* 手数料計算の内訳バッジ表示 */}
+                        {t.ocr_data && t.ocr_data.fee_calculation && (
+                          <div className="flex items-center space-x-2 mt-1 text-[10px]">
+                            <span className="bg-amber-100 text-amber-900 font-bold px-1.5 py-0.5 rounded">
+                              手数料({t.ocr_data.fee_calculation.fee_rate}%): -¥{t.ocr_data.fee_calculation.fee_amount?.toLocaleString()}
+                            </span>
+                            <span className="bg-emerald-100 text-emerald-900 font-extrabold px-1.5 py-0.5 rounded">
+                              受取: ¥{t.ocr_data.fee_calculation.net_amount?.toLocaleString()}
+                            </span>
+                          </div>
                         )}
                       </div>
                     </div>
@@ -1047,94 +1358,7 @@ function App() {
         )}
 
         {/* ========================================================================= */}
-        {/* TAB 3: Google カレンダー連携 */}
-        {/* ========================================================================= */}
-        {activeTab === "calendar" && (
-          <div className="space-y-4">
-            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm space-y-4">
-              <div className="flex items-center space-x-3">
-                <span className="text-3xl">📅</span>
-                <div>
-                  <h2 className="text-base font-bold text-slate-900">Google カレンダー 自動同期</h2>
-                  <p className="text-xs text-slate-500">1日の収支合計を非公開の終日イベントとして同期します</p>
-                </div>
-              </div>
-
-              <div className="bg-indigo-50 border border-indigo-100 p-3 rounded-xl text-xs text-indigo-900 space-y-1">
-                <p className="font-bold">✨ カレンダー登録イベントの仕様:</p>
-                <p>・<b>タイトル</b>: 【収支】収入: ¥48,200 / 支出: ¥14,300 (差引: +¥33,900)</p>
-                <p>・<b>説明</b>: Uber売上、Rocket Now売上、仕入高、消耗品費の内訳明細</p>
-                <p>・<b>公開設定</b>: 非公開 (Private) の終日イベントとしてプライバシー保護</p>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
-                <button
-                  type="button"
-                  disabled={syncing}
-                  onClick={() => handleCalendarSync("day", new Date().toISOString().slice(0, 10))}
-                  className="py-3 px-4 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl shadow-md text-sm transition-all flex items-center justify-center space-x-2"
-                >
-                  <span>📅 本日 ({new Date().toISOString().slice(5, 10)}) の収支を同期</span>
-                </button>
-                <button
-                  type="button"
-                  disabled={syncing}
-                  onClick={() => handleCalendarSync("month", currentMonth)}
-                  className="py-3 px-4 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-xl shadow-md text-sm transition-all flex items-center justify-center space-x-2"
-                >
-                  <span>📆 今月 ({currentMonth}) 分を一括同期</span>
-                </button>
-              </div>
-
-              {syncing && (
-                <div className="py-4 text-center text-xs text-slate-500 animate-pulse">
-                  カレンダー同期中...
-                </div>
-              )}
-
-              {/* 同期結果プレビュー */}
-              {syncStatus && (
-                <div className="mt-4 p-4 bg-slate-50 rounded-xl border border-slate-200 text-xs space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className="font-bold text-slate-800">
-                      {syncStatus.mode === "live" ? "🟢 Googleカレンダーに同期完了" : "ℹ️ カレンダー同期プレビュー"}
-                    </span>
-                    <span className="text-[10px] bg-slate-200 px-2 py-0.5 rounded-full font-bold">
-                      {syncStatus.mode === "live" ? syncStatus.action : "Preview"}
-                    </span>
-                  </div>
-
-                  {syncStatus.message && (
-                    <p className="text-slate-600 text-[11px] bg-amber-50 p-2 rounded border border-amber-200">
-                      {syncStatus.message}
-                    </p>
-                  )}
-
-                  {syncStatus.event && (
-                    <div className="bg-white p-3 rounded-lg border border-slate-200 space-y-1">
-                      <p className="font-extrabold text-indigo-900 text-sm">{syncStatus.event.summary}</p>
-                      <pre className="text-[11px] text-slate-600 whitespace-pre-wrap font-sans mt-1 bg-slate-50 p-2 rounded">
-                        {syncStatus.event.description}
-                      </pre>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-
-            {/* バッチ処理の案内 */}
-            <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm text-xs text-slate-600 space-y-2">
-              <h3 className="font-bold text-slate-800 text-sm">💡 自動バッチ処理について</h3>
-              <p>
-                付属のスクリプト <code className="bg-slate-100 px-1 py-0.5 rounded font-mono">scripts/sync_calendar.py</code> を
-                Windowsの「タスクスケジューラ」に登録することで、毎晩決まった時間に当日の収支を自動でGoogleカレンダーへ反映させることができます。
-              </p>
-            </div>
-          </div>
-        )}
-
-        {/* ========================================================================= */}
-        {/* TAB 4: エクスポート (Excel, PDF, MF CSV, 弥生 CSV) */}
+        {/* TAB 3: エクスポート (Excel, PDF, MF CSV, 弥生 CSV) */}
         {/* ========================================================================= */}
         {activeTab === "export" && (
           <div className="space-y-4">
@@ -1217,7 +1441,7 @@ function App() {
         )}
 
         {/* ========================================================================= */}
-        {/* TAB 5: 設定 */}
+        {/* TAB 4: 設定 */}
         {/* ========================================================================= */}
         {activeTab === "settings" && (
           <div className="space-y-4">
@@ -1242,6 +1466,24 @@ function App() {
                       <option key={b} value={b}>{b}</option>
                     ))}
                   </select>
+                </div>
+
+                {/* 既定のカード決済手数料率 */}
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">
+                    カード決済 手数料率 (%)
+                  </label>
+                  <div className="flex items-center space-x-2">
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={cardFeeRate}
+                      onChange={(e) => setCardFeeRate(e.target.value)}
+                      className="w-32 px-3 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-bold text-slate-800 focus:bg-white outline-none"
+                    />
+                    <span className="text-sm font-bold text-slate-600">%</span>
+                    <span className="text-xs text-slate-400">（楽天ターミナル標準: 3.24%）</span>
+                  </div>
                 </div>
 
                 <button
@@ -1329,4 +1571,3 @@ function App() {
 
 const root = ReactDOM.createRoot(document.getElementById("root"));
 root.render(<App />);
-
