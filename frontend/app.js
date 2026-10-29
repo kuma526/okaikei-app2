@@ -1,3 +1,26 @@
+Searched "share.gemini.google/K6bsqgpPSz2g"
+Ran fetch shared gemini page
+Ran extract Gemini share text
+Ran add RAKUTEN_FEE_RATES · Exited with code 1
+Ran execute Python script to update app.js · Exited with code 1
+Created update_script.py
+Ran run update_script.py
+Ran verify bracket counts
+Ran run test_system.py
+
+ご指摘ありがとうございます。
+以下の2点を確実に反映・修正いたしました：
+
+1. **現金決済時の手数料バグ修正**
+   * 店舗売上で「現金」を選択した場合は、手数料の減算処理を一切行わず、入力した売上金額がそのまま受取金額（総額 = 受取額）として記録されるよう修正しました。
+   * 手数料自動計算（内訳記録・減算）が実行されるのは、**決済方法で「楽天ターミナル」を選んだ時のみに限定**しました。
+2. **楽天ターミナルの「決済手段別」手数料率の動的連動**
+   * コード先頭付近に `RAKUTEN_FEE_RATES` 定数オブジェクトを定義し、プルダウンで選択した決済手段（「カード」「QRコード」「電子マネー」）に応じて、それぞれの手数料率が動的に反映されて自動計算されるようにしました。
+   * 各パーセンテージ（数値）はコード上部でいつでも簡単に変更・微調整可能です。
+
+ローカルファイル（`frontend/app.js`）は直接上書き保存済みですが、以下に**先頭から末尾まで一切省略のない完全な全コード**を出力いたします。
+
+```javascript
 const { useState, useEffect, useMemo, useRef } = React;
 
 // 勘定科目リスト
@@ -118,6 +141,14 @@ const EXPENSE_PAYMENT_METHODS = [
 // 楽天ターミナル決済種別
 const RAKUTEN_PAYMENT_TYPES = ["カード", "QRコード", "電子マネー"];
 
+// 楽天ターミナル 決済手段別の標準手数料率 (%)
+// ※ ここで各決済手段のパーセンテージ（手数料率）を簡単に書き換え・調整可能です
+const RAKUTEN_FEE_RATES = {
+  "カード": 3.24,      // クレジットカード決済手数料率 (%)
+  "QRコード": 3.24,    // QRコード決済手数料率 (%)
+  "電子マネー": 3.24   // 電子マネー決済手数料率 (%)
+};
+
 function App() {
   const [activeTab, setActiveTab] = useState("input"); // 'input', 'list', 'export', 'settings'
   const [currentMonth, setCurrentMonth] = useState(new Date().toISOString().slice(0, 7)); // 'YYYY-MM'
@@ -145,7 +176,7 @@ function App() {
   // 店舗売上・決済方法ステート
   const [storePaymentMethod, setStorePaymentMethod] = useState("cash"); // 'cash', 'rakuten_terminal'
   const [rakutenPaymentType, setRakutenPaymentType] = useState("カード"); // 'カード', 'QRコード', '電子マネー'
-  const [cardFeeRate, setCardFeeRate] = useState("3.24"); // 手数料率 (%) デフォルト3.24%
+  const [cardFeeRate, setCardFeeRate] = useState(String(RAKUTEN_FEE_RATES["カード"] || "3.24")); // 手数料率 (%)
   const [enableFeeCalc, setEnableFeeCalc] = useState(true); // 手数料自動計算
 
   // 画像添付・アップロード状態
@@ -284,11 +315,21 @@ function App() {
         bank_name: "現金"
       }));
     } else {
+      const defaultRate = RAKUTEN_FEE_RATES[rakutenPaymentType] !== undefined ? String(RAKUTEN_FEE_RATES[rakutenPaymentType]) : "3.24";
+      setCardFeeRate(defaultRate);
       setFormData(prev => ({
         ...prev,
         payee: "店舗売上 (楽天ターミナル)",
         bank_name: "楽天ターミナル"
       }));
+    }
+  };
+
+  // 楽天ターミナルの決済手段切り替え（手段ごとの手数料率を動的反映）
+  const handleRakutenPaymentTypeChange = (type) => {
+    setRakutenPaymentType(type);
+    if (RAKUTEN_FEE_RATES[type] !== undefined) {
+      setCardFeeRate(String(RAKUTEN_FEE_RATES[type]));
     }
   };
 
@@ -352,12 +393,11 @@ function App() {
       let finalDescription = formData.description ? formData.description.trim() : "";
       let finalOcrData = formData.ocr_data ? (typeof formData.ocr_data === "object" ? { ...formData.ocr_data } : {}) : {};
 
-      // カード売上（楽天ターミナル、または手数料計算有効時）の内訳を自動反映・記録
+      // 手数料自動計算は【店舗売上 かつ 楽天ターミナル選択時のみ】に限定（現金決済時は手数料ゼロ・受取額=総額）
       const isRakutenTerminal = (entryType === "income" && sourceType === "store" && storePaymentMethod === "rakuten_terminal");
-      const shouldCalcCardFee = isRakutenTerminal || (entryType === "income" && enableFeeCalc && feeCalculation.gross > 0);
 
-      if (shouldCalcCardFee && feeCalculation.gross > 0) {
-        const pType = isRakutenTerminal ? rakutenPaymentType : "カード";
+      if (isRakutenTerminal && feeCalculation.gross > 0) {
+        const pType = rakutenPaymentType;
         const breakdownMemo = `【${pType}売上内訳】総額: ¥${feeCalculation.gross.toLocaleString()} / 手数料(${feeCalculation.rate}%): -¥${feeCalculation.fee.toLocaleString()} / 振込受取額: ¥${feeCalculation.net.toLocaleString()}`;
 
         if (!finalDescription) {
@@ -637,7 +677,7 @@ function App() {
                         <span>店舗売上の決済方法</span>
                       </span>
                       <span className="text-[11px] text-emerald-700">
-                        {storePaymentMethod === "cash" ? "直接入力メモ" : "決済種別・手数料自動計算"}
+                        {storePaymentMethod === "cash" ? "直接入力メモ (手数料ゼロ)" : "決済種別・手数料自動計算"}
                       </span>
                     </div>
                     <div className="grid grid-cols-2 gap-2">
@@ -672,7 +712,7 @@ function App() {
             )}
 
             {entryType === "expense" && (
-              <div className="flex gap-2 overflow-x-auto pb-1 no-scrollbar">
+              <div className="flex gap-2 overflow-x-auto pb-1 no-scrollbar text-xs">
                 <button
                   type="button"
                   onClick={() => handleSourceTypeChange("purchase")}
@@ -825,13 +865,13 @@ function App() {
                 </div>
               </div>
 
-              {/* カード売上・決済手数料の自動計算カード（楽天ターミナル時） */}
-              {entryType === "income" && ((sourceType === "store" && storePaymentMethod === "rakuten_terminal") || (sourceType !== "store" && enableFeeCalc)) && (
+              {/* カード売上・決済手数料の自動計算カード（楽天ターミナル時のみ表示） */}
+              {entryType === "income" && sourceType === "store" && storePaymentMethod === "rakuten_terminal" && (
                 <div className="bg-amber-50/80 border border-amber-300 rounded-xl p-3 space-y-2.5">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-bold text-amber-900 flex items-center gap-1">
                       <span>🧮</span>
-                      <span>決済手数料の自動計算 (内訳記録)</span>
+                      <span>決済手数料の自動計算 ({rakutenPaymentType})</span>
                     </span>
                     <div className="flex items-center space-x-1.5">
                       <span className="text-[11px] text-slate-600 font-medium">手数料率:</span>
@@ -850,19 +890,19 @@ function App() {
 
                   {/* レート切り替えクイックボタン */}
                   <div className="flex items-center gap-1.5 text-[11px]">
-                    <span className="text-slate-500 font-medium">プリセット:</span>
-                    {["3.24", "3.0", "3.25"].map(r => (
+                    <span className="text-slate-500 font-medium">標準レート:</span>
+                    {RAKUTEN_PAYMENT_TYPES.map(t => (
                       <button
-                        key={r}
+                        key={t}
                         type="button"
-                        onClick={() => setCardFeeRate(r)}
+                        onClick={() => handleRakutenPaymentTypeChange(t)}
                         className={`px-2 py-0.5 rounded-md font-bold transition-all ${
-                          cardFeeRate === r 
+                          rakutenPaymentType === t 
                             ? "bg-amber-600 text-white shadow-2xs" 
                             : "bg-white text-amber-800 border border-amber-200 hover:bg-amber-100/50"
                         }`}
                       >
-                        {r}%
+                        {t}: {RAKUTEN_FEE_RATES[t]}%
                       </button>
                     ))}
                   </div>
@@ -876,7 +916,7 @@ function App() {
                       </span>
                     </div>
                     <div className="flex justify-between items-center text-rose-600">
-                      <span>引かれた手数料 ({feeCalculation.rate}%):</span>
+                      <span>引かれた手数料 ({rakutenPaymentType} {feeCalculation.rate}%):</span>
                       <span className="font-bold">
                         -¥{feeCalculation.fee.toLocaleString()}
                       </span>
@@ -1032,11 +1072,11 @@ function App() {
                       <div className="space-y-1.5">
                         <select
                           value={rakutenPaymentType}
-                          onChange={(e) => setRakutenPaymentType(e.target.value)}
+                          onChange={(e) => handleRakutenPaymentTypeChange(e.target.value)}
                           className="w-full px-3 py-2 bg-rose-50 border border-rose-200 rounded-xl text-xs font-bold text-rose-950 focus:bg-white focus:border-rose-600 outline-none transition-all cursor-pointer shadow-xs"
                         >
                           {RAKUTEN_PAYMENT_TYPES.map(t => (
-                            <option key={t} value={t}>💳 決済種別: {t}</option>
+                            <option key={t} value={t}>💳 決済種別: {t} ({RAKUTEN_FEE_RATES[t]}%)</option>
                           ))}
                         </select>
 
@@ -1571,3 +1611,4 @@ function App() {
 
 const root = ReactDOM.createRoot(document.getElementById("root"));
 root.render(<App />);
+```
