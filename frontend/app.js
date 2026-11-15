@@ -1,25 +1,3 @@
-Analyzed app.js:L1-800
-Analyzed app.js:L801-1600
-Analyzed app.js:L1560-1645
-Canceled search RAKUTEN in codebase
-Checked task Search RAKUTEN in codebase
-Killed task Search RAKUTEN in codebase
-Ran list top-level directories
-Ran check backend for rakuten references
-Ran find occurrences of RAKUTEN and rakutenPaymentType
-Edited app.js
-Edited app.js
-Edited app.js
-Analyzed app.js:L1085-1110
-Edited app.js
-Ran check JS syntax · Exited with code 1
-Analyzed index.html:L1-45
-Ran find assets route in backend
-Analyzed app.js:L1-800
-Analyzed app.js:L801-1600
-Analyzed app.js:L1560-1652
-
-javascript
 const { useState, useEffect, useMemo, useRef } = React;
 
 // 勘定科目リスト
