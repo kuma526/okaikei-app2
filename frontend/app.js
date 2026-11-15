@@ -19,7 +19,7 @@ Analyzed app.js:L1-800
 Analyzed app.js:L801-1600
 Analyzed app.js:L1560-1652
 
-```javascript
+javascript
 const { useState, useEffect, useMemo, useRef } = React;
 
 // 勘定科目リスト
@@ -1672,4 +1672,3 @@ function App() {
 
 const root = ReactDOM.createRoot(document.getElementById("root"));
 root.render(<App />);
-```
