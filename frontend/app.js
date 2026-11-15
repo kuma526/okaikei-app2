@@ -1,3 +1,25 @@
+Analyzed app.js:L1-800
+Analyzed app.js:L801-1600
+Analyzed app.js:L1560-1645
+Canceled search RAKUTEN in codebase
+Checked task Search RAKUTEN in codebase
+Killed task Search RAKUTEN in codebase
+Ran list top-level directories
+Ran check backend for rakuten references
+Ran find occurrences of RAKUTEN and rakutenPaymentType
+Edited app.js
+Edited app.js
+Edited app.js
+Analyzed app.js:L1085-1110
+Edited app.js
+Ran check JS syntax · Exited with code 1
+Analyzed index.html:L1-45
+Ran find assets route in backend
+Analyzed app.js:L1-800
+Analyzed app.js:L801-1600
+Analyzed app.js:L1560-1652
+
+```javascript
 const { useState, useEffect, useMemo, useRef } = React;
 
 // 勘定科目リスト
@@ -116,14 +138,34 @@ const EXPENSE_PAYMENT_METHODS = [
 ];
 
 // 楽天ターミナル決済種別
-const RAKUTEN_PAYMENT_TYPES = ["カード", "QRコード", "電子マネー"];
+const RAKUTEN_PAYMENT_TYPES = [
+  "クレジットカード全般",
+  "QRコード (楽天/au/SmartCode等)",
+  "QRコード (PayPay/d払い)",
+  "電子マネー (交通系/Edy/WAON等)",
+  "電子マネー (QUICPay/iD)"
+];
 
 // 楽天ターミナル 決済手段別の標準手数料率 (%)
-// ※ ここで各決済手段のパーセンテージ（手数料率）を簡単に書き換え・調整可能です
+// ※ 最新の標準プランに準拠（クレジットカード全般: 3.24%, 楽天/au/SmartCode等: 2.95%, PayPay/d払い: 3.24%, 交通系/Edy/WAON等: 2.95%, QUICPay/iD: 3.24%）
 const RAKUTEN_FEE_RATES = {
-  "カード": 3.24,      // クレジットカード決済手数料率 (%)
-  "QRコード": 3.24,    // QRコード決済手数料率 (%)
-  "電子マネー": 3.24   // 電子マネー決済手数料率 (%)
+  "クレジットカード全般": 3.24,
+  "QRコード (楽天/au/SmartCode等)": 2.95,
+  "QRコード (PayPay/d払い)": 3.24,
+  "電子マネー (交通系/Edy/WAON等)": 2.95,
+  "電子マネー (QUICPay/iD)": 3.24
+};
+
+// Googleドライブ等のURLをプレビュー画像URLに整形するヘルパー関数
+const getDriveDisplayUrl = (url) => {
+  if (!url) return "";
+  if (typeof url === "string" && url.includes("drive.google.com")) {
+    const match = url.match(/\/d\/([a-zA-Z0-9_-]+)/) || url.match(/id=([a-zA-Z0-9_-]+)/);
+    if (match && match[1]) {
+      return `https://drive.google.com/thumbnail?id=${match[1]}&sz=w1000`;
+    }
+  }
+  return url;
 };
 
 function App() {
@@ -152,8 +194,8 @@ function App() {
 
   // 店舗売上・決済方法ステート
   const [storePaymentMethod, setStorePaymentMethod] = useState("cash"); // 'cash', 'rakuten_terminal'
-  const [rakutenPaymentType, setRakutenPaymentType] = useState("カード"); // 'カード', 'QRコード', '電子マネー'
-  const [cardFeeRate, setCardFeeRate] = useState(String(RAKUTEN_FEE_RATES["カード"] || "3.24")); // 手数料率 (%)
+  const [rakutenPaymentType, setRakutenPaymentType] = useState("クレジットカード全般");
+  const [cardFeeRate, setCardFeeRate] = useState("3.24"); // 手数料率 (%) デフォルト3.24%
   const [enableFeeCalc, setEnableFeeCalc] = useState(true); // 手数料自動計算
 
   // 画像添付・アップロード状態
@@ -322,22 +364,41 @@ function App() {
     return { gross, rate, fee, net };
   }, [formData.amount, cardFeeRate]);
 
-  // ファイルアップロード（即時サーバー保存）
+  // ファイルアップロード（Base64化してサーバー・Googleドライブ保存）
   const handleFileUpload = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
 
     setUploadingImage(true);
-    setPreviewImage(URL.createObjectURL(file));
-
-    const form = new FormData();
-    form.append("file", file);
 
     try {
+      // 1. ブラウザ側で直接Base64に変換（プレビューと送信の両方に対応）
+      const base64DataUrl = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = (error) => reject(error);
+        reader.readAsDataURL(file);
+      });
+
+      // プレビュー表示
+      setPreviewImage(base64DataUrl);
+
+      // 2. Base64データ部を抽出してバックエンドへ送信
+      const base64Content = base64DataUrl.includes(",") 
+        ? base64DataUrl.split(",")[1] 
+        : base64DataUrl;
+
       const res = await fetch("/api/upload-receipt", {
         method: "POST",
-        body: form
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          filename: file.name || "receipt.jpg",
+          file: base64Content
+        })
       });
+
       const data = await res.json();
 
       if (data.success && data.receipt_url) {
@@ -345,9 +406,13 @@ function App() {
           ...prev,
           receipt_path: data.receipt_url
         }));
-        showAlert("📸 レシート画像を添付・保存しました！");
+        if (data.storage === "gdrive") {
+          showAlert("📸 レシート画像をGoogleドライブに保存しました！");
+        } else {
+          showAlert("📸 レシート画像を添付・保存しました！");
+        }
       } else {
-        showAlert("画像の保存に失敗しました", "error");
+        showAlert(data.message || "画像の保存に失敗しました", "error");
       }
     } catch (err) {
       console.error(err);
@@ -654,7 +719,7 @@ function App() {
                         <span>店舗売上の決済方法</span>
                       </span>
                       <span className="text-[11px] text-emerald-700">
-                        {storePaymentMethod === "cash" ? "直接入力メモ (手数料ゼロ)" : "決済種別・手数料自動計算"}
+                        {storePaymentMethod === "cash" ? "直接入力メモ" : "決済種別・手数料自動計算"}
                       </span>
                     </div>
                     <div className="grid grid-cols-2 gap-2">
@@ -689,7 +754,7 @@ function App() {
             )}
 
             {entryType === "expense" && (
-              <div className="flex gap-2 overflow-x-auto pb-1 no-scrollbar text-xs">
+              <div className="flex gap-2 overflow-x-auto pb-1 no-scrollbar">
                 <button
                   type="button"
                   onClick={() => handleSourceTypeChange("purchase")}
@@ -842,13 +907,13 @@ function App() {
                 </div>
               </div>
 
-              {/* カード売上・決済手数料の自動計算カード（楽天ターミナル時のみ表示） */}
+              {/* カード売上・決済手数料の自動計算カード（楽天ターミナル時） */}
               {entryType === "income" && sourceType === "store" && storePaymentMethod === "rakuten_terminal" && (
                 <div className="bg-amber-50/80 border border-amber-300 rounded-xl p-3 space-y-2.5">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-bold text-amber-900 flex items-center gap-1">
                       <span>🧮</span>
-                      <span>決済手数料の自動計算 ({rakutenPaymentType})</span>
+                      <span>決済手数料の自動計算 (内訳記録)</span>
                     </span>
                     <div className="flex items-center space-x-1.5">
                       <span className="text-[11px] text-slate-600 font-medium">手数料率:</span>
@@ -867,19 +932,19 @@ function App() {
 
                   {/* レート切り替えクイックボタン */}
                   <div className="flex items-center gap-1.5 text-[11px]">
-                    <span className="text-slate-500 font-medium">標準レート:</span>
-                    {RAKUTEN_PAYMENT_TYPES.map(t => (
+                    <span className="text-slate-500 font-medium">プリセット:</span>
+                    {["3.24", "2.95", "3.0", "3.25"].map(r => (
                       <button
-                        key={t}
+                        key={r}
                         type="button"
-                        onClick={() => handleRakutenPaymentTypeChange(t)}
+                        onClick={() => setCardFeeRate(r)}
                         className={`px-2 py-0.5 rounded-md font-bold transition-all ${
-                          rakutenPaymentType === t 
+                          cardFeeRate === r 
                             ? "bg-amber-600 text-white shadow-2xs" 
                             : "bg-white text-amber-800 border border-amber-200 hover:bg-amber-100/50"
                         }`}
                       >
-                        {t}: {RAKUTEN_FEE_RATES[t]}%
+                        {r}%
                       </button>
                     ))}
                   </div>
@@ -893,7 +958,7 @@ function App() {
                       </span>
                     </div>
                     <div className="flex justify-between items-center text-rose-600">
-                      <span>引かれた手数料 ({rakutenPaymentType} {feeCalculation.rate}%):</span>
+                      <span>引かれた手数料 ({feeCalculation.rate}%):</span>
                       <span className="font-bold">
                         -¥{feeCalculation.fee.toLocaleString()}
                       </span>
@@ -1053,7 +1118,7 @@ function App() {
                           className="w-full px-3 py-2 bg-rose-50 border border-rose-200 rounded-xl text-xs font-bold text-rose-950 focus:bg-white focus:border-rose-600 outline-none transition-all cursor-pointer shadow-xs"
                         >
                           {RAKUTEN_PAYMENT_TYPES.map(t => (
-                            <option key={t} value={t}>💳 決済種別: {t} ({RAKUTEN_FEE_RATES[t]}%)</option>
+                            <option key={t} value={t}>💳 {t} ({RAKUTEN_FEE_RATES[t]}%)</option>
                           ))}
                         </select>
 
@@ -1523,17 +1588,36 @@ function App() {
         >
           <div className="relative max-w-lg w-full max-h-[85vh] bg-white rounded-2xl overflow-hidden shadow-2xl p-4 text-center" onClick={(e) => e.stopPropagation()}>
             <div className="relative rounded-xl overflow-hidden bg-slate-100 flex items-center justify-center min-h-[200px] max-h-[70vh]">
-              <img src={viewImageModal} alt="Receipt" className="w-full max-h-[70vh] object-contain rounded-xl" />
+              <img 
+                src={getDriveDisplayUrl(viewImageModal)} 
+                alt="Receipt" 
+                className="w-full max-h-[70vh] object-contain rounded-xl" 
+                onError={(e) => {
+                  // ドライブ直接リンクで画像タグでのプレビューが制限されている場合のフォールバック
+                  e.target.style.display = 'none';
+                }}
+              />
             </div>
 
             <div className="mt-3 flex items-center justify-center space-x-2">
-              <a
-                href={viewImageModal}
-                download
-                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-full transition-colors flex items-center space-x-1"
-              >
-                <span>💾 画像ダウンロード</span>
-              </a>
+              {viewImageModal && viewImageModal.includes("drive.google.com") ? (
+                <a
+                  href={viewImageModal}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-full transition-colors flex items-center space-x-1 shadow-sm"
+                >
+                  <span>📂 Googleドライブで開く</span>
+                </a>
+              ) : (
+                <a
+                  href={viewImageModal}
+                  download
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-full transition-colors flex items-center space-x-1"
+                >
+                  <span>💾 画像ダウンロード</span>
+                </a>
+              )}
               <button
                 onClick={() => setViewImageModal(null)}
                 className="px-6 py-2 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold rounded-full transition-colors"
@@ -1588,3 +1672,4 @@ function App() {
 
 const root = ReactDOM.createRoot(document.getElementById("root"));
 root.render(<App />);
+```
