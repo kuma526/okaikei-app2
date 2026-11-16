@@ -147,6 +147,7 @@ def upload_receipt(payload: dict):
     if not file_base64:
         raise HTTPException(status_code=400, detail="No file data provided")
     
+    # Google Apps Script Web App URL が設定されている場合はGoogleドライブへ転送
     if GAS_WEBHOOK_URL:
         try:
             res = requests.post(
@@ -164,6 +165,7 @@ def upload_receipt(payload: dict):
         except Exception as e:
             print("Google Drive upload error:", e)
             
+    # フォールバック: ローカルサーバー保存
     try:
         import base64
         file_bytes = base64.b64decode(file_base64)
