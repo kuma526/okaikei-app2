@@ -7,7 +7,7 @@ Ran inspect FastAPI body_params  Exited with code 1
 Ran inspect FastAPI body_params
 Ran test ASGI request with JSON  Exited with code 1
 Created test_asgi.py
-Ran run test_asgi.py · Exited with code 1
+Ran run test_asgi.py Exited with code 1
 Writing test_asgi.py
 Edited test_asgi.py
 Ran run test_asgi.py
