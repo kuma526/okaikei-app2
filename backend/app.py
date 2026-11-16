@@ -147,7 +147,6 @@ def upload_receipt(payload: dict):
     if not file_base64:
         raise HTTPException(status_code=400, detail="No file data provided")
     
-    # Google Apps Script Web App URL が設定されている場合はGoogleドライブへ転送
     if GAS_WEBHOOK_URL:
         try:
             res = requests.post(
@@ -165,7 +164,6 @@ def upload_receipt(payload: dict):
         except Exception as e:
             print("Google Drive upload error:", e)
             
-    # フォールバック: ローカルサーバー保存
     try:
         import base64
         file_bytes = base64.b64decode(file_base64)
@@ -184,7 +182,8 @@ def upload_receipt(payload: dict):
 
 app.mount("/receipts", StaticFiles(directory=RECEIPTS_DIR), name="receipts")
 
-# 静的ファイルの配信（フロントエンド）
+# 静的ファイルの配信（フロントエンドおよびassetsパスの解決）
 FRONTEND_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", "frontend"))
 if os.path.exists(FRONTEND_DIR):
+    app.mount("/assets", StaticFiles(directory=FRONTEND_DIR), name="assets")
     app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
