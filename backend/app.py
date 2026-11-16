@@ -2,10 +2,10 @@ Analyzed app.py:L270-415
 Ran check requests.post signature
 Ran check requests.api.post source
 Ran check Session.request source
-Ran test FastAPI with File(None) on JSON · Exited with code 1
-Ran inspect FastAPI body_params · Exited with code 1
+Ran test FastAPI with File(None) on JSON Exited with code 1
+Ran inspect FastAPI body_params  Exited with code 1
 Ran inspect FastAPI body_params
-Ran test ASGI request with JSON · Exited with code 1
+Ran test ASGI request with JSON  Exited with code 1
 Created test_asgi.py
 Ran run test_asgi.py · Exited with code 1
 Writing test_asgi.py
