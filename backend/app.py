@@ -1,4 +1,21 @@
-# backend/app.py
+Analyzed app.py:L270-415
+Ran check requests.post signature
+Ran check requests.api.post source
+Ran check Session.request source
+Ran test FastAPI with File(None) on JSON · Exited with code 1
+Ran inspect FastAPI body_params · Exited with code 1
+Ran inspect FastAPI body_params
+Ran test ASGI request with JSON · Exited with code 1
+Created test_asgi.py
+Ran run test_asgi.py · Exited with code 1
+Writing test_asgi.py
+Edited test_asgi.py
+Ran run test_asgi.py
+Edited app.py
+Ran compile backend/app.py
+Analyzed app.py:L1-552
+
+```python
 import os
 import io
 import uuid
@@ -360,35 +377,40 @@ async def upload_receipt(request: Request, file: Optional[UploadFile] = File(Non
     drive_file_url = None
 
     # Google Apps Script (GAS) へのアップロード処理
-    gas_url = os.environ.get("GAS_WEBHOOK_URL", "").strip() or get_setting("gas_webhook_url", "").strip()
+    gas_url = os.environ.get("GAS_WEBHOOK_URL", "").strip() or GAS_WEBHOOK_URL or get_setting("gas_webhook_url", "").strip()
     if gas_url and b64_data:
         try:
             gas_payload = {
                 "filename": unique_filename,
-                "file": b64_data,
-                "base64": b64_data,
-                "mimeType": mime_type
+                "file": b64_data
             }
             # requests で GAS Webhook へ POST 送信
             response = requests.post(
                 gas_url,
                 json=gas_payload,
                 headers={"Content-Type": "application/json"},
+                allow_redirects=True,
                 timeout=35
             )
             if response.status_code == 200:
                 try:
                     res_data = response.json()
-                    drive_file_url = (
-                        res_data.get("url") or
-                        res_data.get("fileUrl") or
-                        res_data.get("file_url") or
-                        res_data.get("receipt_url") or
-                        res_data.get("drive_url")
-                    )
+                    if isinstance(res_data, dict):
+                        drive_file_url = (
+                            res_data.get("url") or
+                            res_data.get("fileUrl") or
+                            res_data.get("file_url") or
+                            res_data.get("receipt_url") or
+                            res_data.get("drive_url") or
+                            res_data.get("webViewLink")
+                        )
+                        if not drive_file_url and isinstance(res_data.get("data"), dict):
+                            drive_file_url = res_data["data"].get("url") or res_data["data"].get("fileUrl")
+                    elif isinstance(res_data, str) and (res_data.startswith("http://") or res_data.startswith("https://")):
+                        drive_file_url = res_data
                 except Exception:
                     # プレーンテキストでURLが返ってきた場合のフォールバック
-                    text_resp = response.text.strip()
+                    text_resp = response.text.strip().strip('"\'')
                     if text_resp.startswith("http://") or text_resp.startswith("https://"):
                         drive_file_url = text_resp
 
@@ -546,3 +568,4 @@ def serve_index():
     if os.path.exists(index_path):
         return FileResponse(index_path)
     return {"message": "出納帳Webアプリ APIサーバー稼働中"}
+```
