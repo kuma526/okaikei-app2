@@ -179,4 +179,230 @@ def get_settings_api():
 @app.post("/api/settings")
 def update_setting(su: SettingUpdate):
     settings = load_settings()
-    settings[su
+    settings[su.key] = su.value
+    save_settings(settings)
+    return {"success": True}
+
+@app.post("/api/upload-receipt")
+def upload_receipt(payload: dict):
+    filename = payload.get("filename", "receipt.jpg")
+    file_base64 = payload.get("file", "")
+    tx_date = payload.get("date", datetime.now().strftime("%Y-%m-%d"))
+    
+    if not file_base64:
+        raise HTTPException(status_code=400, detail="No file data provided")
+    
+    # 取引日と時刻がひと目で分かるファイル名に自動リネーム
+    time_str = datetime.now().strftime("%H%M%S")
+    ext = os.path.splitext(filename)[1] or ".jpg"
+    new_filename = f"receipt_{tx_date}_{time_str}{ext}"
+    
+    if GAS_WEBHOOK_URL:
+        try:
+            res = requests.post(
+                GAS_WEBHOOK_URL,
+                json={"filename": new_filename, "file": file_base64},
+                timeout=20
+            )
+            data = res.json()
+            if data.get("success") and data.get("file_url"):
+                return {
+                    "success": True,
+                    "receipt_url": data["file_url"],
+                    "filename": new_filename,
+                    "storage": "gdrive"
+                }
+        except Exception as e:
+            print("Google Drive upload error:", e)
+            
+    try:
+        file_bytes = base64.b64decode(file_base64)
+        file_path = os.path.join(RECEIPTS_DIR, new_filename)
+        with open(file_path, "wb") as f:
+            f.write(file_bytes)
+        return {
+            "success": True,
+            "receipt_url": f"/receipts/{new_filename}",
+            "filename": new_filename,
+            "storage": "local"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/export/excel")
+def export_excel(month: str = Query(...)):
+    txs = [t for t in load_transactions() if t.get("date", "").startswith(month)]
+    txs.sort(key=lambda x: x.get("date", ""))
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = f"{month} 出納帳"
+
+    headers = ["日付", "区分", "勘定科目", "金額(円)", "取引先・店舗名", "決済手段・口座", "摘要・内訳"]
+    ws.append(headers)
+
+    for col_num in range(1, len(headers) + 1):
+        cell = ws.cell(row=1, column=col_num)
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = PatternFill(start_color="1E293B", end_color="1E293B", fill_type="solid")
+
+    for t in txs:
+        ws.append([
+            t.get("date"),
+            "売上" if t.get("type") == "income" else ("支出" if t.get("type") == "expense" else "口座移動"),
+            t.get("category"),
+            t.get("amount"),
+            t.get("payee"),
+            t.get("bank_name"),
+            t.get("description")
+        ])
+
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+    filename = f"Kaikei_{month}.xlsx"
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{filename}"}
+    )
+
+@app.get("/api/export/pdf")
+def export_pdf(month: str = Query(...)):
+    txs = [t for t in load_transactions() if t.get("date", "").startswith(month)]
+    txs.sort(key=lambda x: x.get("date", ""))
+    
+    total_inc = sum(t["amount"] for t in txs if t.get("type") == "income")
+    total_exp = sum(t["amount"] for t in txs if t.get("type") == "expense")
+    net_inc = total_inc - total_exp
+
+    buffer = io.BytesIO()
+    p = canvas.Canvas(buffer, pagesize=A4)
+    width, height = A4
+
+    # タイトル・サマリー（日本語CIDフォントで文字化け完全防止）
+    p.setFont(JP_FONT, 16)
+    p.drawString(40, height - 45, f"【勘太郎】月次出納帳レポート ({month})")
+    
+    p.setFont(JP_FONT, 11)
+    p.drawString(40, height - 70, f"総売上: ¥{total_inc:,}   |   総支出: ¥{total_exp:,}   |   差引利益: ¥{net_inc:,}")
+    p.line(40, height - 78, width - 40, height - 78)
+
+    # テーブル見出し
+    y = height - 100
+    p.setFont(JP_FONT, 10)
+    p.drawString(40, y, "日付")
+    p.drawString(110, y, "区分")
+    p.drawString(155, y, "勘定科目")
+    p.drawString(240, y, "金額")
+    p.drawString(315, y, "取引先 / 摘要メモ")
+    p.line(40, y - 6, width - 40, y - 6)
+    
+    y -= 22
+    p.setFont(JP_FONT, 9)
+    for t in txs:
+        t_type = "売上" if t.get("type") == "income" else ("支出" if t.get("type") == "expense" else "銀行")
+        p.drawString(40, y, str(t.get("date", "")))
+        p.drawString(110, y, t_type)
+        p.drawString(155, y, str(t.get("category", ""))[:8])
+        p.drawString(240, y, f"¥{t.get('amount', 0):,}")
+        
+        memo = f"{t.get('payee', '')} {t.get('description', '')}".strip()
+        p.drawString(315, y, memo[:30])
+        
+        y -= 18
+        if y < 50:
+            p.showPage()
+            p.setFont(JP_FONT, 9)
+            y = height - 50
+
+    p.save()
+    buffer.seek(0)
+    filename = f"Report_{month}.pdf"
+    return StreamingResponse(
+        buffer,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{filename}"}
+    )
+
+@app.get("/api/export/csv/mf")
+def export_mf_csv(month: str = Query(...)):
+    txs = [t for t in load_transactions() if t.get("date", "").startswith(month)]
+    txs.sort(key=lambda x: x.get("date", ""))
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["計算期間", "日付", "借方勘定科目", "借方金額", "貸方勘定科目", "貸方金額", "摘要"])
+    for t in txs:
+        is_inc = t.get("type") == "income"
+        writer.writerow([
+            t.get("date"),
+            t.get("date"),
+            t.get("bank_name") if is_inc else t.get("category"),
+            t.get("amount"),
+            t.get("category") if is_inc else t.get("bank_name"),
+            t.get("amount"),
+            f"{t.get('payee')} {t.get('description')}".strip()
+        ])
+    output.seek(0)
+    return StreamingResponse(
+        io.BytesIO(output.getvalue().encode("utf-8-sig")),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename=MF_{month}.csv"}
+    )
+
+@app.get("/api/export/csv/yayoi")
+def export_yayoi_csv(month: str = Query(...)):
+    txs = [t for t in load_transactions() if t.get("date", "").startswith(month)]
+    txs.sort(key=lambda x: x.get("date", ""))
+    output = io.StringIO()
+    writer = csv.writer(output)
+    for t in txs:
+        is_inc = t.get("type") == "income"
+        writer.writerow([
+            2100,
+            t.get("date"),
+            t.get("bank_name") if is_inc else t.get("category"),
+            "",
+            t.get("category") if is_inc else t.get("bank_name"),
+            "",
+            t.get("amount"),
+            t.get("amount"),
+            f"{t.get('payee')} {t.get('description')}".strip()
+        ])
+    output.seek(0)
+    return StreamingResponse(
+        io.BytesIO(output.getvalue().encode("utf-8-sig")),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename=Yayoi_{month}.csv"}
+    )
+
+@app.get("/api/export/csv/tax")
+def export_tax_csv(month: str = Query(...)):
+    """確定申告・汎用一覧用CSV出力"""
+    txs = [t for t in load_transactions() if t.get("date", "").startswith(month)]
+    txs.sort(key=lambda x: x.get("date", ""))
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["日付", "区分", "勘定科目", "金額", "取引先", "決済手段・口座", "摘要・内訳"])
+    for t in txs:
+        writer.writerow([
+            t.get("date"),
+            "収入" if t.get("type") == "income" else ("支出" if t.get("type") == "expense" else "口座移動"),
+            t.get("category"),
+            t.get("amount"),
+            t.get("payee"),
+            t.get("bank_name"),
+            t.get("description")
+        ])
+    output.seek(0)
+    return StreamingResponse(
+        io.BytesIO(output.getvalue().encode("utf-8-sig")),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename=KakuteiShinkoku_{month}.csv"}
+    )
+
+app.mount("/receipts", StaticFiles(directory=RECEIPTS_DIR), name="receipts")
+
+FRONTEND_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", "frontend"))
+if os.path.exists(FRONTEND_DIR):
+    app.mount("/assets", StaticFiles(directory=FRONTEND_DIR), name="assets")
+    app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
