@@ -98,10 +98,8 @@ const COMMON_DESCRIPTIONS = {
   ]
 };
 
-// 銀行リスト
 const BANKS = ["三井住友銀行", "楽天銀行", "三菱UFJ銀行", "みずほ銀行", "ゆうちょ銀行", "PayPay銀行", "住信SBIネット銀行", "現金"];
 
-// 支出用決済・支払元リスト
 const EXPENSE_PAYMENT_METHODS = [
   "現金",
   "カード決済",
@@ -115,7 +113,6 @@ const EXPENSE_PAYMENT_METHODS = [
   "住信SBIネット銀行"
 ];
 
-// 楽天ターミナル決済種別
 const RAKUTEN_PAYMENT_TYPES = [
   "クレジットカード全般",
   "QRコード (楽天/au/SmartCode等)",
@@ -124,7 +121,6 @@ const RAKUTEN_PAYMENT_TYPES = [
   "電子マネー (QUICPay/iD)"
 ];
 
-// 楽天ターミナル 決済手段別の標準手数料率 (%)
 const RAKUTEN_FEE_RATES = {
   "クレジットカード全般": 3.24,
   "QRコード (楽天/au/SmartCode等)": 2.95,
@@ -133,7 +129,6 @@ const RAKUTEN_FEE_RATES = {
   "電子マネー (QUICPay/iD)": 3.24
 };
 
-// Googleドライブ等のURLをプレビュー画像URLに整形するヘルパー関数
 const getDriveDisplayUrl = (url) => {
   if (!url) return "";
   if (typeof url === "string" && url.includes("drive.google.com")) {
@@ -1073,9 +1068,185 @@ function App() {
                 </div>
               </div>
             )}
+
+            <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 space-y-3">
+              <h2 className="text-xs font-bold text-slate-500 uppercase tracking-wider">📤 月次帳票・レポート出力</h2>
+              <div className="grid grid-cols-2 gap-2">
+                <a
+                  href={`/api/export/excel?month=${currentMonth}`}
+                  className="p-3 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-xl text-center transition-all block"
+                >
+                  <div className="text-xl mb-0.5">📊</div>
+                  <div className="text-xs font-bold text-emerald-900">Excel出納帳</div>
+                  <div className="text-[10px] text-emerald-700">自動計算・集計表つき</div>
+                </a>
+                <a
+                  href={`/api/export/pdf?month=${currentMonth}`}
+                  className="p-3 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-xl text-center transition-all block"
+                >
+                  <div className="text-xl mb-0.5">📄</div>
+                  <div className="text-xs font-bold text-rose-900">PDF月次レポート</div>
+                  <div className="text-[10px] text-rose-700">印刷・保存用</div>
+                </a>
+                <a
+                  href={`/api/export/csv/mf?month=${currentMonth}`}
+                  className="p-3 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-xl text-center transition-all block"
+                >
+                  <div className="text-xl mb-0.5">📥</div>
+                  <div className="text-xs font-bold text-blue-900">MFクラウド用 CSV</div>
+                  <div className="text-[10px] text-blue-700">マネーフォワード連携</div>
+                </a>
+                <a
+                  href={`/api/export/csv/yayoi?month=${currentMonth}`}
+                  className="p-3 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-xl text-center transition-all block"
+                >
+                  <div className="text-xl mb-0.5">📥</div>
+                  <div className="text-xs font-bold text-indigo-900">弥生会計用 CSV</div>
+                  <div className="text-[10px] text-indigo-700">弥生形式インポート</div>
+                </a>
+              </div>
+            </div>
+
+            <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 space-y-3">
+              <div className="flex flex-col sm:flex-row gap-2 justify-between items-center">
+                <h2 className="text-xs font-bold text-slate-500 uppercase tracking-wider">📋 記録一覧 ({filteredTransactions.length}件)</h2>
+                <div className="w-full sm:w-auto flex gap-2">
+                  <input
+                    type="text"
+                    placeholder="キーワード検索..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="w-full sm:w-40 px-3 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded-lg outline-none"
+                  />
+                  <select
+                    value={filterType}
+                    onChange={(e) => setFilterType(e.target.value)}
+                    className="px-2 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded-lg outline-none font-bold"
+                  >
+                    <option value="all">すべて表示</option>
+                    <option value="income">売上のみ</option>
+                    <option value="expense">支出のみ</option>
+                    <option value="bank">銀行入出金</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="space-y-2 max-h-[500px] overflow-y-auto pr-1">
+                {filteredTransactions.length === 0 ? (
+                  <p className="text-center py-8 text-xs text-slate-400">該当する取引データはありません</p>
+                ) : (
+                  filteredTransactions.map(t => (
+                    <div key={t.id} className="bg-slate-50 border border-slate-200 rounded-xl p-3 flex items-center justify-between gap-2 text-xs">
+                      <div className="space-y-0.5">
+                        <div className="flex items-center space-x-1.5">
+                          <span className={`px-2 py-0.5 rounded font-bold text-[10px] ${
+                            t.type === 'income' ? 'bg-emerald-100 text-emerald-800' : t.type === 'expense' ? 'bg-rose-100 text-rose-800' : 'bg-blue-100 text-blue-800'
+                          }`}>
+                            {t.category}
+                          </span>
+                          <span className="text-slate-400">{t.date}</span>
+                          <span className="text-slate-600 font-medium">({t.bank_name})</span>
+                        </div>
+                        <div className="font-bold text-slate-800 text-sm">
+                          {t.payee || '摘要なし'} {t.description && <span className="text-slate-500 font-normal text-xs">/ {t.description}</span>}
+                        </div>
+                        {t.receipt_path && (
+                          <button
+                            type="button"
+                            onClick={() => setViewImageModal(getDriveDisplayUrl(t.receipt_path))}
+                            className="inline-flex items-center space-x-1 text-indigo-600 hover:text-indigo-800 font-bold mt-1"
+                          >
+                            <span>📸</span>
+                            <span>レシート画像を表示</span>
+                          </button>
+                        )}
+                      </div>
+                      <div className="text-right flex items-center space-x-2">
+                        <div>
+                          <p className={`text-base font-extrabold ${t.type === 'income' ? 'text-emerald-700' : t.type === 'expense' ? 'text-rose-700' : 'text-blue-700'}`}>
+                            {t.type === 'income' ? '+' : t.type === 'expense' ? '-' : ''}¥{t.amount.toLocaleString()}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleDelete(t.id)}
+                          className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                          title="削除"
+                        >
+                          🗑️
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {activeTab === "settings" && (
+          <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 space-y-4">
+            <h2 className="text-sm font-bold text-slate-900 border-b pb-2">⚙️ アプリ設定</h2>
+            <form onSubmit={handleSaveSettings} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-600 mb-1">デフォルトの銀行口座</label>
+                <input
+                  type="text"
+                  value={settings.default_bank_name}
+                  onChange={(e) => setSettings({ ...settings, default_bank_name: e.target.value })}
+                  className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-300 rounded-xl outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-600 mb-1">楽天ターミナル 標準カード手数料率 (%)</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={cardFeeRate}
+                  onChange={(e) => setCardFeeRate(e.target.value)}
+                  className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-300 rounded-xl outline-none font-bold"
+                />
+              </div>
+              <button
+                type="submit"
+                className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs shadow"
+              >
+                設定を保存する
+              </button>
+            </form>
           </div>
         )}
       </main>
+
+      {viewImageModal && (
+        <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-4 space-y-3 relative">
+            <div className="flex justify-between items-center">
+              <h3 className="font-bold text-sm text-slate-800">📸 レシート・領収書画像</h3>
+              <button
+                type="button"
+                onClick={() => setViewImageModal(null)}
+                className="p-1 rounded-full hover:bg-slate-100 text-slate-500 font-bold"
+              >
+                ✕ 閉じる
+              </button>
+            </div>
+            <div className="text-center bg-slate-100 rounded-xl p-2">
+              <img src={viewImageModal} alt="Receipt" className="max-h-[70vh] object-contain mx-auto rounded-lg" />
+            </div>
+            <div className="text-center">
+              <a
+                href={viewImageModal}
+                target="_blank"
+                rel="noreferrer"
+                className="text-xs text-indigo-600 hover:underline font-bold"
+              >
+                🔗 画像を原寸大で開く（別タブ）
+              </a>
+            </div>
+          </div>
+        </div>
+      )}
 
       <nav className="fixed bottom-0 left-0 right-0 bg-white/95 backdrop-blur border-t border-slate-200 z-40 safe-bottom shadow-lg">
         <div className="max-w-md mx-auto sm:max-w-2xl md:max-w-4xl flex items-center justify-around py-2">
