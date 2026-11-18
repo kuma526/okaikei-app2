@@ -186,7 +186,7 @@ def export_excel(month: str = Query(...)):
     ws = wb.active
     ws.title = f"{month} 出納帳"
 
-    headers = ["日付", "種別", "勘定科目", "金額", "取引先・ payee", "決済・口座", "摘要"]
+    headers = ["日付", "種別", "勘定科目", "金額", "取引先", "決済・口座", "摘要"]
     ws.append(headers)
 
     for t in txs:
