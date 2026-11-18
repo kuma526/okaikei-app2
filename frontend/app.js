@@ -1,13 +1,11 @@
 const { useState, useEffect, useMemo, useRef } = React;
 
-// 勘定科目リスト
 const CATEGORIES = [
   "仕入高", "消耗品費", "旅費交通費", "通信費", "会議費",
   "接待交際費", "新聞図書費", "荷造運賃", "水道光熱費",
   "修繕費", "支払手数料", "地代家賃", "広告宣伝費", "雑費"
 ];
 
-// よく使う品目・摘要メモの定型候補（科目別）
 const COMMON_DESCRIPTIONS = {
   "仕入高": [
     "仕入れ商品一式",
@@ -1070,44 +1068,6 @@ function App() {
             )}
 
             <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 space-y-3">
-              <h2 className="text-xs font-bold text-slate-500 uppercase tracking-wider">📤 月次帳票・レポート出力</h2>
-              <div className="grid grid-cols-2 gap-2">
-                <a
-                  href={`/api/export/excel?month=${currentMonth}`}
-                  className="p-3 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-xl text-center transition-all block"
-                >
-                  <div className="text-xl mb-0.5">📊</div>
-                  <div className="text-xs font-bold text-emerald-900">Excel出納帳</div>
-                  <div className="text-[10px] text-emerald-700">自動計算・集計表つき</div>
-                </a>
-                <a
-                  href={`/api/export/pdf?month=${currentMonth}`}
-                  className="p-3 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-xl text-center transition-all block"
-                >
-                  <div className="text-xl mb-0.5">📄</div>
-                  <div className="text-xs font-bold text-rose-900">PDF月次レポート</div>
-                  <div className="text-[10px] text-rose-700">印刷・保存用</div>
-                </a>
-                <a
-                  href={`/api/export/csv/mf?month=${currentMonth}`}
-                  className="p-3 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-xl text-center transition-all block"
-                >
-                  <div className="text-xl mb-0.5">📥</div>
-                  <div className="text-xs font-bold text-blue-900">MFクラウド用 CSV</div>
-                  <div className="text-[10px] text-blue-700">マネーフォワード連携</div>
-                </a>
-                <a
-                  href={`/api/export/csv/yayoi?month=${currentMonth}`}
-                  className="p-3 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-xl text-center transition-all block"
-                >
-                  <div className="text-xl mb-0.5">📥</div>
-                  <div className="text-xs font-bold text-indigo-900">弥生会計用 CSV</div>
-                  <div className="text-[10px] text-indigo-700">弥生形式インポート</div>
-                </a>
-              </div>
-            </div>
-
-            <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 space-y-3">
               <div className="flex flex-col sm:flex-row gap-2 justify-between items-center">
                 <h2 className="text-xs font-bold text-slate-500 uppercase tracking-wider">📋 記録一覧 ({filteredTransactions.length}件)</h2>
                 <div className="w-full sm:w-auto flex gap-2">
@@ -1179,6 +1139,48 @@ function App() {
                     </div>
                   ))
                 )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {activeTab === "export" && (
+          <div className="space-y-4">
+            <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 space-y-3">
+              <h2 className="text-xs font-bold text-slate-500 uppercase tracking-wider">📤 月次帳票・レポート出力</h2>
+              <div className="grid grid-cols-2 gap-2">
+                <a
+                  href={`/api/export/excel?month=${currentMonth}`}
+                  className="p-3 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-xl text-center transition-all block"
+                >
+                  <div className="text-xl mb-0.5">📊</div>
+                  <div className="text-xs font-bold text-emerald-900">Excel出納帳</div>
+                  <div className="text-[10px] text-emerald-700">自動計算・集計表つき</div>
+                </a>
+                <a
+                  href={`/api/export/pdf?month=${currentMonth}`}
+                  className="p-3 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-xl text-center transition-all block"
+                >
+                  <div className="text-xl mb-0.5">📄</div>
+                  <div className="text-xs font-bold text-rose-900">PDF月次レポート</div>
+                  <div className="text-[10px] text-rose-700">印刷・保存用</div>
+                </a>
+                <a
+                  href={`/api/export/csv/mf?month=${currentMonth}`}
+                  className="p-3 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-xl text-center transition-all block"
+                >
+                  <div className="text-xl mb-0.5">📥</div>
+                  <div className="text-xs font-bold text-blue-900">MFクラウド用 CSV</div>
+                  <div className="text-[10px] text-blue-700">マネーフォワード連携</div>
+                </a>
+                <a
+                  href={`/api/export/csv/yayoi?month=${currentMonth}`}
+                  className="p-3 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-xl text-center transition-all block"
+                >
+                  <div className="text-xl mb-0.5">📥</div>
+                  <div className="text-xs font-bold text-indigo-900">弥生会計用 CSV</div>
+                  <div className="text-[10px] text-indigo-700">弥生形式インポート</div>
+                </a>
               </div>
             </div>
           </div>
@@ -1265,6 +1267,14 @@ function App() {
           >
             <span className="text-xl">📊</span>
             <span className="text-[11px] mt-0.5">一覧・集計</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab("export")}
+            className={`flex flex-col items-center justify-center w-20 py-1 transition-all ${activeTab === "export" ? "text-indigo-600 font-bold scale-105" : "text-slate-500"}`}
+          >
+            <span className="text-xl">📄</span>
+            <span className="text-[11px] mt-0.5">帳票出力</span>
           </button>
         </div>
       </nav>
