@@ -11,11 +11,13 @@ from pydantic import BaseModel
 import openpyxl
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 from openpyxl.utils import get_column_letter
+
 import reportlab
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
+
 import csv
 import io
 import requests
@@ -30,6 +32,16 @@ RECEIPTS_DIR = os.path.join(BASE_DIR, "receipts")
 os.makedirs(RECEIPTS_DIR, exist_ok=True)
 
 GAS_WEBHOOK_URL = os.environ.get("GAS_WEBHOOK_URL", "")
+
+# ── 日本語フォント（IPAexGothic等）の登録処理 ──
+FONT_NAME = "Helvetica" # フォールバック
+font_path = os.path.join(BASE_DIR, "ipaexg.ttf")
+if os.path.exists(font_path):
+    try:
+        pdfmetrics.registerFont(TTFont('IPAexGothic', font_path))
+        FONT_NAME = 'IPAexGothic'
+    except Exception as e:
+        print("Font registration error:", e)
 
 def load_transactions():
     if not os.path.exists(DATA_FILE):
@@ -146,11 +158,16 @@ def upload_receipt(payload: dict):
     if not file_base64:
         raise HTTPException(status_code=400, detail="No file data provided")
     
+    # 日付付きファイル名へのリネーム処理
+    date_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+    ext = os.path.splitext(filename)[1] or ".jpg"
+    new_filename = f"receipt_{date_str}{ext}"
+    
     if GAS_WEBHOOK_URL:
         try:
             res = requests.post(
                 GAS_WEBHOOK_URL,
-                json={"filename": filename, "file": file_base64},
+                json={"filename": new_filename, "file": file_base64},
                 timeout=15
             )
             data = res.json()
@@ -166,7 +183,6 @@ def upload_receipt(payload: dict):
     try:
         import base64
         file_bytes = base64.b64decode(file_base64)
-        ext = os.path.splitext(filename)[1] or ".jpg"
         unique_name = f"{uuid.uuid4().hex}{ext}"
         file_path = os.path.join(RECEIPTS_DIR, unique_name)
         with open(file_path, "wb") as f:
@@ -217,15 +233,18 @@ def export_pdf(month: str = Query(...)):
     p = canvas.Canvas(buffer, pagesize=A4)
     width, height = A4
 
+    p.setFont(FONT_NAME, 14)
     p.drawString(50, height - 50, f"【勘太郎】月次レポート ({month})")
     
+    p.setFont(FONT_NAME, 10)
     y = height - 90
-    for t in txs[:30]:
+    for t in txs:
         line = f"{t.get('date')} | {t.get('category')} | ¥{t.get('amount'):,} | {t.get('payee', '')}"
         p.drawString(50, y, line)
-        y -= 20
+        y = y - 20
         if y < 50:
             p.showPage()
+            p.setFont(FONT_NAME, 10)
             y = height - 50
 
     p.save()
