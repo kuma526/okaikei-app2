@@ -92,6 +92,7 @@ function App() {
   const [transactions, setTransactions] = useState([]);
   const [summary, setSummary] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [driveBusy, setDriveBusy] = useState(false);
   const [alertMsg, setAlertMsg] = useState(null);
   const [editingId, setEditingId] = useState(null);
 
@@ -353,7 +354,6 @@ function App() {
         } else if (!finalDescription.includes("振込受取額:")) {
           finalDescription = `${finalDescription} ${breakdownMemo}`;
         }
-        // 手数料が引かれた後の実受取額を計上
         finalAmount = feeCalculation.net;
         finalOcrData.fee_calculation = {
           gross_amount: feeCalculation.gross,
@@ -387,7 +387,7 @@ function App() {
       });
 
       if (res.ok) {
-        showAlert(editingId ? "✅ 取引を更新しました！" : "✅ 取引を記録しました！");
+        showAlert(editingId ? "✅ 取引を更新し、ドライブにも保存しました！" : "✅ 取引を記録し、ドライブにも保存しました！");
         setEditingId(null);
         setFormData(prev => ({
           ...prev,
@@ -456,6 +456,43 @@ function App() {
       }
     } catch (e) {
       showAlert("削除に失敗しました", "error");
+    }
+  };
+
+  const handleDriveBackupNow = async () => {
+    setDriveBusy(true);
+    try {
+      const res = await fetch("/api/backup/drive/save", { method: "POST" });
+      if (res.ok) {
+        showAlert("☁️ GoogleドライブのJSON専用フォルダに保存しました！");
+      } else {
+        showAlert("ドライブ保存に失敗しました", "error");
+      }
+    } catch (e) {
+      showAlert("通信エラーでドライブ保存に失敗しました", "error");
+    } finally {
+      setDriveBusy(false);
+    }
+  };
+
+  const handleDriveRestoreNow = async () => {
+    if (!confirm("GoogleドライブのJSONバックアップからデータを読み込みますか？")) return;
+    setDriveBusy(true);
+    try {
+      const res = await fetch("/api/backup/drive/load", { method: "POST" });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        localStorage.setItem(LOCAL_BACKUP_KEY, JSON.stringify(data.transactions || []));
+        await loadTransactions();
+        await loadSummary();
+        showAlert("☁️ Googleドライブからデータを復元しました！");
+      } else {
+        showAlert(data.detail || "ドライブからの読み込みに失敗しました", "error");
+      }
+    } catch (e) {
+      showAlert("通信エラーで読み込みに失敗しました", "error");
+    } finally {
+      setDriveBusy(false);
     }
   };
 
@@ -1013,7 +1050,30 @@ function App() {
             </div>
 
             <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 space-y-3">
-              <h2 className="text-xs font-bold text-slate-500">🛡️ データのバックアップ・復元 (消滅防止)</h2>
+              <h2 className="text-xs font-bold text-slate-500">☁️ Googleドライブ JSONバックアップ・復元</h2>
+              <p className="text-xs text-slate-500">取引の登録・更新・削除時にドライブへ自動保存されます。万が一の際はドライブから復元できます。</p>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  disabled={driveBusy}
+                  onClick={handleDriveBackupNow}
+                  className="p-2.5 bg-sky-600 hover:bg-sky-700 text-white rounded-xl text-xs font-bold disabled:opacity-50"
+                >
+                  {driveBusy ? "通信中..." : "☁️ 今すぐドライブ保存"}
+                </button>
+                <button
+                  type="button"
+                  disabled={driveBusy}
+                  onClick={handleDriveRestoreNow}
+                  className="p-2.5 bg-sky-50 hover:bg-sky-100 border border-sky-300 text-sky-900 rounded-xl text-xs font-bold disabled:opacity-50"
+                >
+                  {driveBusy ? "通信中..." : "📥 ドライブから復元"}
+                </button>
+              </div>
+            </div>
+
+            <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 space-y-3">
+              <h2 className="text-xs font-bold text-slate-500">🛡️ 端末へのバックアップ・復元 (消滅防止)</h2>
               <p className="text-xs text-slate-500">ブラウザ内にも自動保存されていますが、ファイルとして手元に保存しておくと100%安全です。</p>
               <div className="grid grid-cols-2 gap-2">
                 <button type="button" onClick={handleDownloadBackup} className="p-2.5 bg-slate-800 text-white rounded-xl text-xs font-bold">
