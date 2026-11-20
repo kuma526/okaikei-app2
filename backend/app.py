@@ -29,7 +29,6 @@ os.makedirs(RECEIPTS_DIR, exist_ok=True)
 
 GAS_WEBHOOK_URL = os.environ.get("GAS_WEBHOOK_URL", "")
 
-# PDF用の標準日本語フォントを登録（追加ファイル不要で文字化けしません）
 JP_FONT = "HeiseiKakuGo-W5"
 try:
     pdfmetrics.registerFont(UnicodeCIDFont(JP_FONT))
@@ -37,7 +36,6 @@ except Exception as e:
     print("CID Font error:", e)
     JP_FONT = "Helvetica"
 
-# 写真から読み取った11月14日〜16日の復元用初期データ
 RECOVERED_INITIAL_DATA = [
     {"id": "rec1114a", "date": "2026-11-14", "type": "expense", "source_type": "purchase", "category": "仕入高", "amount": 734, "payee": "復元データ(編集可)", "description": "", "bank_name": "現金", "receipt_path": ""},
     {"id": "rec1114b", "date": "2026-11-14", "type": "expense", "source_type": "purchase", "category": "仕入高", "amount": 328, "payee": "復元データ(編集可)", "description": "", "bank_name": "現金", "receipt_path": ""},
@@ -57,21 +55,37 @@ RECOVERED_INITIAL_DATA = [
 
 def load_transactions():
     if not os.path.exists(DATA_FILE):
-        save_transactions(RECOVERED_INITIAL_DATA)
+        save_transactions(RECOVERED_INITIAL_DATA, sync_drive=False)
         return list(RECOVERED_INITIAL_DATA)
     try:
         with open(DATA_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
             if not data:
-                save_transactions(RECOVERED_INITIAL_DATA)
+                save_transactions(RECOVERED_INITIAL_DATA, sync_drive=False)
                 return list(RECOVERED_INITIAL_DATA)
             return data
     except Exception:
         return list(RECOVERED_INITIAL_DATA)
 
-def save_transactions(transactions):
+def push_backup_to_drive(transactions):
+    if not GAS_WEBHOOK_URL:
+        return False
+    try:
+        res = requests.post(
+            GAS_WEBHOOK_URL,
+            json={"action": "save_json_backup", "transactions": transactions},
+            timeout=20
+        )
+        return res.ok
+    except Exception as e:
+        print("Drive JSON backup error:", e)
+        return False
+
+def save_transactions(transactions, sync_drive=True):
     with open(DATA_FILE, "w", encoding="utf-8") as f:
         json.dump(transactions, f, ensure_ascii=False, indent=2)
+    if sync_drive:
+        push_backup_to_drive(transactions)
 
 def load_settings():
     if not os.path.exists(SETTINGS_FILE):
@@ -118,7 +132,7 @@ def create_transaction(tx: Transaction):
     tx_dict = tx.dict()
     tx_dict["id"] = new_id
     txs.append(tx_dict)
-    save_transactions(txs)
+    save_transactions(txs, sync_drive=True)
     return {"success": True, "id": new_id, "transaction": tx_dict}
 
 @app.put("/api/transactions/{tx_id}")
@@ -129,7 +143,7 @@ def update_transaction(tx_id: str, tx: Transaction):
             tx_dict = tx.dict()
             tx_dict["id"] = tx_id
             txs[i] = tx_dict
-            save_transactions(txs)
+            save_transactions(txs, sync_drive=True)
             return {"success": True, "transaction": tx_dict}
     raise HTTPException(status_code=404, detail="Transaction not found")
 
@@ -137,12 +151,11 @@ def update_transaction(tx_id: str, tx: Transaction):
 def delete_transaction(tx_id: str):
     txs = load_transactions()
     new_txs = [t for t in txs if t.get("id") != tx_id]
-    save_transactions(new_txs)
+    save_transactions(new_txs, sync_drive=True)
     return {"success": True}
 
 @app.post("/api/transactions/sync")
 def sync_transactions(client_txs: List[dict]):
-    """ブラウザのバックアップデータとサーバーデータを統合して消滅を防ぐAPI"""
     server_txs = load_transactions()
     by_id = {t.get("id"): t for t in server_txs if t.get("id")}
     changed = False
@@ -153,9 +166,47 @@ def sync_transactions(client_txs: List[dict]):
             changed = True
     merged = list(by_id.values())
     if changed:
-        save_transactions(merged)
+        save_transactions(merged, sync_drive=True)
     merged.sort(key=lambda x: (x.get("date", ""), x.get("id", "")), reverse=True)
     return {"success": True, "transactions": merged}
+
+@app.post("/api/backup/drive/save")
+def backup_drive_save():
+    txs = load_transactions()
+    ok = push_backup_to_drive(txs)
+    if not ok:
+        raise HTTPException(status_code=500, detail="Google Drive backup failed")
+    return {"success": True, "count": len(txs)}
+
+@app.post("/api/backup/drive/load")
+def backup_drive_load():
+    if not GAS_WEBHOOK_URL:
+        raise HTTPException(status_code=400, detail="GAS_WEBHOOK_URL is not configured")
+    try:
+        res = requests.post(
+            GAS_WEBHOOK_URL,
+            json={"action": "load_json_backup"},
+            timeout=20
+        )
+        data = res.json()
+        if not data.get("success"):
+            raise HTTPException(status_code=500, detail=data.get("error", "Load failed"))
+        drive_txs = data.get("transactions", [])
+        if not isinstance(drive_txs, list):
+            drive_txs = []
+        current_txs = load_transactions()
+        by_id = {t.get("id"): t for t in current_txs if t.get("id")}
+        for dt in drive_txs:
+            if dt.get("id"):
+                by_id[dt["id"]] = dt
+        merged = list(by_id.values())
+        save_transactions(merged, sync_drive=False)
+        merged.sort(key=lambda x: (x.get("date", ""), x.get("id", "")), reverse=True)
+        return {"success": True, "transactions": merged}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/summary/monthly")
 def get_monthly_summary(month: str = Query(...)):
@@ -192,7 +243,6 @@ def upload_receipt(payload: dict):
     if not file_base64:
         raise HTTPException(status_code=400, detail="No file data provided")
     
-    # 取引日と時刻がひと目で分かるファイル名に自動リネーム
     time_str = datetime.now().strftime("%H%M%S")
     ext = os.path.splitext(filename)[1] or ".jpg"
     new_filename = f"receipt_{tx_date}_{time_str}{ext}"
@@ -279,7 +329,6 @@ def export_pdf(month: str = Query(...)):
     p = canvas.Canvas(buffer, pagesize=A4)
     width, height = A4
 
-    # タイトル・サマリー（日本語CIDフォントで文字化け完全防止）
     p.setFont(JP_FONT, 16)
     p.drawString(40, height - 45, f"【勘太郎】月次出納帳レポート ({month})")
     
@@ -287,7 +336,6 @@ def export_pdf(month: str = Query(...)):
     p.drawString(40, height - 70, f"総売上: ¥{total_inc:,}   |   総支出: ¥{total_exp:,}   |   差引利益: ¥{net_inc:,}")
     p.line(40, height - 78, width - 40, height - 78)
 
-    # テーブル見出し
     y = height - 100
     p.setFont(JP_FONT, 10)
     p.drawString(40, y, "日付")
@@ -377,7 +425,6 @@ def export_yayoi_csv(month: str = Query(...)):
 
 @app.get("/api/export/csv/tax")
 def export_tax_csv(month: str = Query(...)):
-    """確定申告・汎用一覧用CSV出力"""
     txs = [t for t in load_transactions() if t.get("date", "").startswith(month)]
     txs.sort(key=lambda x: x.get("date", ""))
     output = io.StringIO()
