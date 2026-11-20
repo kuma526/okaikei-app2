@@ -51,9 +51,9 @@ const RAKUTEN_FEE_RATES = {
 };
 
 const getDriveDisplayUrl = (url) => {
-  if (!url) return "";
-  if (typeof url === "string" && url.includes("drive.google.com")) {
-    const match = url.match(/\/d\/([a-zA-Z0-9_-]+)/) || url.match(/id=([a-zA-Z0-9_-]+)/);
+  if (!url || typeof url !== "string") return "";
+  if (url.includes("drive.google.com")) {
+    const match = url.match(/\/d\/([a-zA-Z0-9_-]+)/) || url.match(/[?&]id=([a-zA-Z0-9_-]+)/);
     if (match && match[1]) {
       return `https://drive.google.com/thumbnail?id=${match[1]}&sz=w1000`;
     }
@@ -102,13 +102,14 @@ function App() {
   const [filterType, setFilterType] = useState("all");
   const [searchQuery, setSearchQuery] = useState("");
 
-  // 初回起動時にブラウザのバックアップとサーバーを自動同期
   useEffect(() => {
-    syncWithLocalBackup().then(() => {
-      loadTransactions();
-      loadSummary();
-      loadSettings();
-    });
+    let mounted = true;
+    (async () => {
+      await syncWithLocalBackup();
+      if (!mounted) return;
+      await Promise.all([loadTransactions(), loadSummary(), loadSettings()]);
+    })();
+    return () => { mounted = false; };
   }, []);
 
   useEffect(() => {
@@ -735,7 +736,14 @@ function App() {
                           {t.payee || '摘要なし'} {t.description && <span className="text-slate-500 font-normal text-xs">/ {t.description}</span>}
                         </div>
                         {t.receipt_path && (
-                          <button type="button" onClick={() => setViewImageModal(getDriveDisplayUrl(t.receipt_path))} className="inline-flex items-center space-x-1 text-indigo-600 font-bold mt-1">
+                          <button
+                            type="button"
+                            onClick={() => setViewImageModal({
+                              preview: getDriveDisplayUrl(t.receipt_path),
+                              raw: t.receipt_path
+                            })}
+                            className="inline-flex items-center space-x-1 text-indigo-600 font-bold mt-1"
+                          >
                             <span>📸 レシート画像を表示</span>
                           </button>
                         )}
@@ -803,6 +811,40 @@ function App() {
           </div>
         )}
       </main>
+
+      {viewImageModal && (
+        <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-4 space-y-3 relative">
+            <div className="flex justify-between items-center">
+              <h3 className="font-bold text-sm text-slate-800">📸 レシート・領収書画像</h3>
+              <button
+                type="button"
+                onClick={() => setViewImageModal(null)}
+                className="p-1 rounded-full hover:bg-slate-100 text-slate-500 font-bold"
+              >
+                ✕ 閉じる
+              </button>
+            </div>
+            <div className="text-center bg-slate-100 rounded-xl p-2">
+              <img
+                src={viewImageModal.preview || viewImageModal.raw}
+                alt="Receipt"
+                className="max-h-[70vh] object-contain mx-auto rounded-lg"
+              />
+            </div>
+            <div className="text-center">
+              <a
+                href={viewImageModal.raw || viewImageModal.preview}
+                target="_blank"
+                rel="noreferrer"
+                className="text-xs text-indigo-600 hover:underline font-bold"
+              >
+                🔗 元のリンクを別タブで開く
+              </a>
+            </div>
+          </div>
+        </div>
+      )}
 
       <nav className="fixed bottom-0 left-0 right-0 bg-white/95 backdrop-blur border-t border-slate-200 z-40 shadow-lg">
         <div className="max-w-md mx-auto sm:max-w-2xl md:max-w-4xl flex items-center justify-around py-2">
