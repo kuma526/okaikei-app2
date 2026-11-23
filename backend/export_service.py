@@ -127,6 +127,7 @@ def export_to_excel(month: str) -> io.BytesIO:
     ws_summary.cell(row=8, column=3).fill = header_fill
 
     source_names = {
+        "store": "店舗売上",
         "uber": "Uber 振込売上",
         "rocket": "Rocket Now 振込売上",
         "manual_income": "その他手動売上"
@@ -208,7 +209,7 @@ def export_to_excel(month: str) -> io.BytesIO:
 
     type_labels = {"income": "収入", "expense": "支出", "bank": "銀行"}
     source_labels = {
-        "uber": "Uber振込", "rocket": "Rocket Now振込", "manual_income": "手動売上",
+        "store": "店舗売上", "uber": "Uber振込", "rocket": "Rocket Now振込", "manual_income": "手動売上",
         "purchase": "仕入れ", "bank_transfer": "銀行振込", "manual_expense": "その他経費",
         "deposit": "銀行入金", "withdrawal": "銀行出金"
     }
@@ -320,6 +321,7 @@ def export_to_pdf(month: str) -> io.BytesIO:
     # 1. 損益計算サマリー表 (損益計算書スタイル)
     elements.append(Paragraph("■ 月次損益サマリー（青色申告決算書・収支内訳書準拠）", heading_style))
 
+    store_tot = summary["income_by_source"].get("store", {}).get("total", 0)
     uber_tot = summary["income_by_source"].get("uber", {}).get("total", 0)
     rocket_tot = summary["income_by_source"].get("rocket", {}).get("total", 0)
     manual_inc_tot = summary["income_by_source"].get("manual_income", {}).get("total", 0)
@@ -340,7 +342,7 @@ def export_to_pdf(month: str) -> io.BytesIO:
 
     pl_data = [
         [Paragraph("科目 / 区分", cell_bold), Paragraph("金額 (税込)", cell_bold), Paragraph("摘要・内訳", cell_bold)],
-        [Paragraph("<b>Ⅰ. 売上高 (収入金額)</b>", cell_style), Paragraph(f"<b>¥{total_income:,}</b>", cell_right), Paragraph(f"Uber: ¥{uber_tot:,} / Rocket Now: ¥{rocket_tot:,} / 他: ¥{manual_inc_tot:,}", cell_style)],
+        [Paragraph("<b>Ⅰ. 売上高 (収入金額)</b>", cell_style), Paragraph(f"<b>¥{total_income:,}</b>", cell_right), Paragraph(f"店舗: ¥{store_tot:,} / Uber: ¥{uber_tot:,} / Rocket: ¥{rocket_tot:,} / 他: ¥{manual_inc_tot:,}", cell_style)],
         [Paragraph("<b>Ⅱ. 売上原価 (仕入高)</b>", cell_style), Paragraph(f"¥{purchase_tot:,}", cell_right), Paragraph("商品仕入れ・直接原価", cell_style)],
         [Paragraph("<b>Ⅲ. 差引売上総利益 (粗利益)</b>", cell_bold), Paragraph(f"<b>¥{gross_profit:,}</b>", cell_right), Paragraph("Ⅰ 売上高 － Ⅱ 仕入高", cell_style)],
         [Paragraph("<b>Ⅳ. 経費合計</b>", cell_style), Paragraph(f"¥{total_operating_expense:,}", cell_right), Paragraph("消耗品費・交通費・通信費などの合算", cell_style)],
@@ -563,4 +565,3 @@ def export_yayoi_csv(month: str) -> str:
         writer.writerow(row)
 
     return output.getvalue()
-

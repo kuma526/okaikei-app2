@@ -20,3 +20,6 @@ backend/uploads/*
 !backend/uploads/.gitkeep
 !backend/data/.gitkeep
 
+# Ignore arbitrary personal files / PDFs
+*.pdf
+

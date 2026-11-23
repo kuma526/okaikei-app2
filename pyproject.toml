@@ -1,7 +1,7 @@
 [project]
-name = "kaikei-app"
-version = "0.1.0"
-description = "Add your description here"
+name = "kantaro-app"
+version = "1.0.0"
+description = "勘太郎 ver. 1.0 - 個人事業主向け 出納帳 Webアプリケーション"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -20,7 +20,7 @@ dependencies = [
 ]
 
 [project.scripts]
-kaikei-app = "kaikei_app:main"
+kantaro = "backend.app:app"
 
 [build-system]
 requires = ["uv_build>=0.13.6,<0.14.0"]

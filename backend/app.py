@@ -2,10 +2,15 @@ import os
 import io
 import uuid
 import shutil
+import base64
+import json
+import urllib.request
+import urllib.error
 from datetime import datetime, date
 from typing import Optional, List, Dict, Any
 from urllib.parse import quote
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Query, Response
+import requests
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Query, Response, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse
@@ -25,8 +30,11 @@ FRONTEND_DIR = os.path.join(BASE_DIR, "frontend")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(FRONTEND_DIR, exist_ok=True)
 
+# Google Apps Script Webhook URL設定（環境変数 GAS_WEBHOOK_URL から読み込み）
+GAS_WEBHOOK_URL = os.environ.get("GAS_WEBHOOK_URL", "").strip()
+
 # アプリ初期化
-app = FastAPI(title="個人事業主 出納帳 Webアプリ", version="1.0.0")
+app = FastAPI(title="勘太郎 ver. 1.0", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -40,7 +48,7 @@ app.add_middleware(
 class TransactionCreate(BaseModel):
     date: str
     type: str # 'income', 'expense', 'bank'
-    source_type: str # 'uber', 'rocket', 'manual_income', 'purchase', 'bank_transfer', 'manual_expense', 'deposit', 'withdrawal'
+    source_type: str # 'store', 'uber', 'rocket', 'manual_income', 'purchase', 'bank_transfer', 'manual_expense', 'deposit', 'withdrawal'
     category: str # 勘定科目
     amount: int
     payee: Optional[str] = ""
@@ -92,6 +100,37 @@ def seed_sample_data_if_empty():
         d6 = f"{curr_month}-20"
 
         samples = [
+            # 収入: 店舗売上 (現金)
+            {
+                "date": d1,
+                "type": "income",
+                "source_type": "store",
+                "category": "売上高",
+                "amount": 35000,
+                "payee": "店舗売上 (現金)",
+                "description": "ランチタイム店頭現金売上",
+                "bank_name": "現金"
+            },
+            # 収入: 店舗売上 (楽天ターミナル・カード)
+            {
+                "date": d1,
+                "type": "income",
+                "source_type": "store",
+                "category": "売上高",
+                "amount": 18000,
+                "payee": "店舗売上 (楽天ターミナル)",
+                "description": "カード決済 (総額: ¥18,000 / 手数料(3.24%): ¥583 / 受取額: ¥17,417)",
+                "bank_name": "楽天ターミナル",
+                "ocr_data": {
+                    "fee_calculation": {
+                        "gross_amount": 18000,
+                        "fee_rate": 3.24,
+                        "fee_amount": 583,
+                        "net_amount": 17417,
+                        "payment_type": "カード"
+                    }
+                }
+            },
             # 収入: Uber振込
             {
                 "date": d1,
@@ -195,24 +234,24 @@ def add_transaction(data: TransactionCreate):
     tid = create_transaction(data.dict())
     return {"id": tid, "message": "Transaction created successfully"}
 
-@app.get("/api/transactions/{tid}")
-def get_single_transaction(tid: int):
-    t = get_transaction_by_id(tid)
+@app.get("/api/transactions/{id}")
+def get_single_transaction(id: int):
+    t = get_transaction_by_id(id)
     if not t:
         raise HTTPException(status_code=404, detail="Transaction not found")
     return t
 
-@app.put("/api/transactions/{tid}")
-def edit_transaction(tid: int, data: TransactionUpdate):
+@app.put("/api/transactions/{id}")
+def edit_transaction(id: int, data: TransactionUpdate):
     update_data = {k: v for k, v in data.dict().items() if v is not None}
-    updated = update_transaction(tid, update_data)
+    updated = update_transaction(id, update_data)
     if not updated:
         raise HTTPException(status_code=404, detail="Transaction not found")
     return {"message": "Transaction updated successfully"}
 
-@app.delete("/api/transactions/{tid}")
-def remove_transaction(tid: int):
-    deleted = delete_transaction(tid)
+@app.delete("/api/transactions/{id}")
+def remove_transaction(id: int):
+    deleted = delete_transaction(id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Transaction not found")
     return {"message": "Transaction deleted successfully"}
@@ -228,42 +267,149 @@ def monthly_summary(month: Optional[str] = None):
 
 
 # -----------------------------
-# 画像アップロード & 保存 API (ローカル安全保存・Google不要)
+# 画像アップロード & 保存 API (ローカル + Googleドライブ GAS自動転送)
 # -----------------------------
 @app.post("/api/upload-receipt")
-async def upload_receipt(file: UploadFile = File(...)):
+async def upload_receipt(request: Request, file: Optional[UploadFile] = File(None)):
     """
-    レシート・領収書画像をサーバーに安全・即座に保存。
-    スマホ撮影の向きズレ（EXIF）を自動補正して保存します。
+    レシート・領収書画像を受け取り、Google Apps Script (GAS) Webhook へ
+    Base64エンコードしたJSON形式 {"filename": "...", "file": "..."} でPOST転送して
+    Googleドライブに保存します。返却されたGoogleドライブのURLを返します。
     """
-    ext = os.path.splitext(file.filename)[1].lower()
+    content_type = request.headers.get("content-type", "")
+    today_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+    random_id = uuid.uuid4().hex[:6]
+    
+    filename = ""
+    file_bytes = b""
+    b64_data = ""
+    ext = ".jpg"
+
+    # 1. JSON (Base64直接送信) の場合
+    if "application/json" in content_type:
+        try:
+            body = await request.json()
+            filename = body.get("filename", "")
+            raw_file_str = body.get("file") or body.get("base64") or ""
+            if "," in raw_file_str:
+                # data:image/png;base64,... 形式のプレフィックスを除去
+                b64_data = raw_file_str.split(",", 1)[1]
+            else:
+                b64_data = raw_file_str
+            
+            if b64_data:
+                file_bytes = base64.b64decode(b64_data)
+        except Exception as e:
+            print(f"JSON Parse Error: {e}")
+
+    # 2. FormData (ファイルアップロード) の場合
+    elif file is not None:
+        filename = file.filename
+        file_bytes = await file.read()
+        b64_data = base64.b64encode(file_bytes).decode("utf-8")
+    else:
+        # Request form のフォールバック
+        form = await request.form()
+        uploaded = form.get("file")
+        if uploaded and hasattr(uploaded, "filename"):
+            filename = uploaded.filename
+            file_bytes = await uploaded.read()
+            b64_data = base64.b64encode(file_bytes).decode("utf-8")
+        elif "file" in form and isinstance(form["file"], str):
+            raw_file_str = form["file"]
+            b64_data = raw_file_str.split(",", 1)[1] if "," in raw_file_str else raw_file_str
+            file_bytes = base64.b64decode(b64_data)
+
+    if filename:
+        ext = os.path.splitext(filename)[1].lower()
     if ext not in [".jpg", ".jpeg", ".png", ".webp"]:
         ext = ".jpg"
 
-    unique_filename = f"receipt_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}{ext}"
+    unique_filename = f"receipt_{today_str}_{random_id}{ext}"
     saved_path = os.path.join(UPLOAD_DIR, unique_filename)
 
-    with open(saved_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
+    # ローカルへバックアップ保存
+    if file_bytes:
+        with open(saved_path, "wb") as buffer:
+            buffer.write(file_bytes)
 
-    # スマホ撮影の向き（EXIF Orientation）を正立補正
-    try:
-        from PIL import Image, ImageOps
-        with Image.open(saved_path) as img:
-            transposed = ImageOps.exif_transpose(img)
-            if transposed is not None:
-                transposed.save(saved_path, quality=92, optimize=True)
-    except Exception:
-        pass
+        # スマホ撮影の向き（EXIF Orientation）を正立補正
+        try:
+            from PIL import Image, ImageOps
+            with Image.open(saved_path) as img:
+                transposed = ImageOps.exif_transpose(img)
+                if transposed is not None:
+                    transposed.save(saved_path, quality=92, optimize=True)
+            with open(saved_path, "rb") as f:
+                file_bytes = f.read()
+            # 補正後のBase64を再作成
+            b64_data = base64.b64encode(file_bytes).decode("utf-8")
+        except Exception:
+            pass
 
+    mime_type = "image/jpeg"
+    if ext == ".png":
+        mime_type = "image/png"
+    elif ext == ".webp":
+        mime_type = "image/webp"
+
+    # ローカルURL（フォールバック用）
     relative_url = f"/uploads/{unique_filename}"
+    storage_type = "local"
+    drive_file_url = None
+
+    # Google Apps Script (GAS) へのアップロード処理
+    gas_url = os.environ.get("GAS_WEBHOOK_URL", "").strip() or GAS_WEBHOOK_URL or get_setting("gas_webhook_url", "").strip()
+    if gas_url and b64_data:
+        try:
+            gas_payload = {
+                "filename": unique_filename,
+                "file": b64_data
+            }
+            # requests で GAS Webhook へ POST 送信
+            response = requests.post(
+                gas_url,
+                json=gas_payload,
+                headers={"Content-Type": "application/json"},
+                allow_redirects=True,
+                timeout=35
+            )
+            if response.status_code == 200:
+                try:
+                    res_data = response.json()
+                    if isinstance(res_data, dict):
+                        drive_file_url = (
+                            res_data.get("url") or
+                            res_data.get("fileUrl") or
+                            res_data.get("file_url") or
+                            res_data.get("receipt_url") or
+                            res_data.get("drive_url") or
+                            res_data.get("webViewLink")
+                        )
+                        if not drive_file_url and isinstance(res_data.get("data"), dict):
+                            drive_file_url = res_data["data"].get("url") or res_data["data"].get("fileUrl")
+                    elif isinstance(res_data, str) and (res_data.startswith("http://") or res_data.startswith("https://")):
+                        drive_file_url = res_data
+                except Exception:
+                    # プレーンテキストでURLが返ってきた場合のフォールバック
+                    text_resp = response.text.strip().strip('"\'')
+                    if text_resp.startswith("http://") or text_resp.startswith("https://"):
+                        drive_file_url = text_resp
+
+            if drive_file_url:
+                relative_url = drive_file_url
+                storage_type = "gdrive"
+        except Exception as e:
+            # GASへの転送に失敗した場合でも、ローカル保存されたURLで続行
+            print(f"GAS Upload Error: {e}")
 
     return {
         "success": True,
-        "storage": "local",
+        "storage": storage_type,
         "receipt_url": relative_url,
         "filename": unique_filename,
-        "message": "レシート画像が正常に保存されました"
+        "gdrive_url": drive_file_url,
+        "message": "レシート画像がGoogleドライブに正常保存されました" if storage_type == "gdrive" else "レシート画像が保存されました"
     }
 
 
@@ -381,7 +527,9 @@ def download_csv(month: Optional[str] = None, format: str = "moneyforward"):
 def get_settings():
     settings = get_all_settings()
     return {
-        "default_bank_name": settings.get("default_bank_name", "三井住友銀行")
+        "default_bank_name": settings.get("default_bank_name", "三井住友銀行"),
+        "card_fee_rate": settings.get("card_fee_rate", "3.24"),
+        "gas_webhook_url": settings.get("gas_webhook_url", os.environ.get("GAS_WEBHOOK_URL", ""))
     }
 
 @app.post("/api/settings")
