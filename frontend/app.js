@@ -1,5 +1,8 @@
 const { useState, useEffect, useMemo, useRef } = React;
 
+// ローカルストレージ自動バックアップ用キー
+const LOCAL_BACKUP_KEY = "kantaro_transactions_backup_v1";
+
 // 勘定科目リスト
 const CATEGORIES = [
   "仕入高", "消耗品費", "旅費交通費", "通信費", "会議費",
@@ -84,9 +87,7 @@ const COMMON_DESCRIPTIONS = {
     "第2週 配達売上振込",
     "第3週 配達売上振込",
     "第4週 配達売上振込",
-    "即時出金 振込売上",
-    "商品販売売上",
-    "業務委託・サービス提供報酬"
+    "即時出金 振込売上"
   ],
   "事業主借": [
     "手元現金より事業口座へ預入",
@@ -97,6 +98,14 @@ const COMMON_DESCRIPTIONS = {
     "プライベート支出の事業口座引落分"
   ]
 };
+
+// 実運用向け 店舗・入金元クイックプリセット
+const STORE_PAYEE_PRESETS = [
+  "店舗売上 (現金)",
+  "店舗売上 (楽天ターミナル)",
+  "Uber Eats (配達売上)",
+  "Rocket Now (デリバリー売上)"
+];
 
 // 銀行リスト
 const BANKS = ["三井住友銀行", "楽天銀行", "三菱UFJ銀行", "みずほ銀行", "ゆうちょ銀行", "PayPay銀行", "住信SBIネット銀行", "現金"];
@@ -154,6 +163,7 @@ function App() {
   const [transactions, setTransactions] = useState([]);
   const [summary, setSummary] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [driveBusy, setDriveBusy] = useState(false);
   const [alertMsg, setAlertMsg] = useState(null);
   const [editingId, setEditingId] = useState(null); // 編集中取引ID
 
@@ -196,16 +206,146 @@ function App() {
   const [filterCategory, setFilterCategory] = useState("all");
   const [searchQuery, setSearchQuery] = useState("");
 
-  // データ初期ロード
+  // データ初期ロード & ローカルバックアップ自動復元同期
   useEffect(() => {
-    loadTransactions();
-    loadSummary();
-    loadSettings();
+    let mounted = true;
+    (async () => {
+      await syncWithLocalBackup();
+      if (!mounted) return;
+      await Promise.all([loadTransactions(), loadSummary(), loadSettings()]);
+    })();
+    return () => { mounted = false; };
   }, [currentMonth]);
 
   const showAlert = (text, type = "success") => {
     setAlertMsg({ text, type });
     setTimeout(() => setAlertMsg(null), 4000);
+  };
+
+  // ブラウザのローカルバックアップとサーバーデータの自動統合
+  const syncWithLocalBackup = async () => {
+    try {
+      const saved = localStorage.getItem(LOCAL_BACKUP_KEY);
+      const localTxs = saved ? JSON.parse(saved) : [];
+      const res = await fetch("/api/transactions/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(localTxs)
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.transactions) {
+          localStorage.setItem(LOCAL_BACKUP_KEY, JSON.stringify(data.transactions));
+        }
+      }
+    } catch (e) {
+      console.error("Local backup sync error:", e);
+    }
+  };
+
+  // ローカルバックアップ（localStorage）の更新
+  const updateLocalBackup = async () => {
+    try {
+      const res = await fetch("/api/transactions");
+      if (res.ok) {
+        const allTxs = await res.json();
+        localStorage.setItem(LOCAL_BACKUP_KEY, JSON.stringify(allTxs));
+      }
+    } catch (e) {
+      console.error("Update local backup error:", e);
+    }
+  };
+
+  // Googleドライブへの手動即時バックアップ保存
+  const handleDriveBackupNow = async () => {
+    setDriveBusy(true);
+    try {
+      const res = await fetch("/api/backup/drive/save", { method: "POST" });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        showAlert("☁️ GoogleドライブのJSON専用フォルダに保存しました！");
+      } else {
+        showAlert(data.detail || "ドライブ保存に失敗しました", "error");
+      }
+    } catch (e) {
+      showAlert("通信エラーでドライブ保存に失敗しました", "error");
+    } finally {
+      setDriveBusy(false);
+    }
+  };
+
+  // Googleドライブからの手動復元・同期
+  const handleDriveRestoreNow = async () => {
+    if (!confirm("GoogleドライブのJSONバックアップから全データを復元・同期しますか？")) return;
+    setDriveBusy(true);
+    try {
+      const res = await fetch("/api/backup/drive/load", { method: "POST" });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        localStorage.setItem(LOCAL_BACKUP_KEY, JSON.stringify(data.transactions || []));
+        await loadTransactions();
+        await loadSummary();
+        showAlert("☁️ Googleドライブからデータを復元しました！");
+      } else {
+        showAlert(data.detail || "ドライブからの読み込みに失敗しました", "error");
+      }
+    } catch (e) {
+      showAlert("通信エラーで読み込みに失敗しました", "error");
+    } finally {
+      setDriveBusy(false);
+    }
+  };
+
+  // 端末へのJSONバックアップダウンロード
+  const handleDownloadBackup = async () => {
+    try {
+      const res = await fetch("/api/transactions");
+      const allTxs = await res.json();
+      const blob = new Blob([JSON.stringify(allTxs, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `kantaro_backup_${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      showAlert("💾 バックアップJSONをダウンロードしました！");
+    } catch (e) {
+      showAlert("バックアップの保存に失敗しました", "error");
+    }
+  };
+
+  // 端末のJSONファイルからの復元・同期
+  const handleRestoreBackup = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      try {
+        const json = JSON.parse(event.target.result);
+        if (!Array.isArray(json)) throw new Error("無効なバックアップファイル形式です");
+        if (!confirm(`バックアップデータ（${json.length}件）を復元・同期しますか？`)) return;
+        const res = await fetch("/api/transactions/sync", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(json)
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.transactions) {
+            localStorage.setItem(LOCAL_BACKUP_KEY, JSON.stringify(data.transactions));
+          }
+          showAlert("✅ バックアップからデータを復元・同期しました！");
+          await loadTransactions();
+          await loadSummary();
+        } else {
+          showAlert("復元に失敗しました", "error");
+        }
+      } catch (err) {
+        showAlert("ファイルの読み込みに失敗しました: " + err.message, "error");
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = "";
   };
 
   const loadTransactions = async () => {
@@ -536,7 +676,7 @@ function App() {
       const data = await res.json();
 
       if (res.ok) {
-        showAlert(isEdit ? "✅ 取引内容を更新しました！" : "✅ 取引を正常に記録しました！");
+        showAlert(isEdit ? "✅ 取引内容を更新し、バックアップを保存しました！" : "✅ 取引を記録し、バックアップを保存しました！");
         // フォーム初期化
         const defaultBank = entryType === "income" 
           ? (sourceType === "store" ? (storePaymentMethod === "cash" ? "現金" : "楽天ターミナル") : (sourceType === "uber" ? "楽天銀行" : (sourceType === "rocket" ? "三井住友銀行" : "現金")))
@@ -561,6 +701,7 @@ function App() {
 
         loadTransactions();
         loadSummary();
+        updateLocalBackup();
 
         if (isEdit) {
           setActiveTab("list");
@@ -581,9 +722,17 @@ function App() {
     try {
       const res = await fetch(`/api/transactions/${id}`, { method: "DELETE" });
       if (res.ok) {
+        const saved = localStorage.getItem(LOCAL_BACKUP_KEY);
+        if (saved) {
+          try {
+            const filtered = JSON.parse(saved).filter(t => t.id !== id);
+            localStorage.setItem(LOCAL_BACKUP_KEY, JSON.stringify(filtered));
+          } catch (_) {}
+        }
         showAlert("取引を削除しました");
         loadTransactions();
         loadSummary();
+        updateLocalBackup();
       }
     } catch (e) {
       showAlert("削除に失敗しました", "error");
@@ -1101,9 +1250,48 @@ function App() {
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-slate-500 mb-1">
-                    {entryType === "income" ? "入金元・取引先" : (entryType === "bank" ? "取引名" : "店舗・取引先名")}
-                  </label>
+                  <div className="flex justify-between items-center mb-1">
+                    <label className="block text-xs font-bold text-slate-500">
+                      {entryType === "income" ? "入金元・取引先" : (entryType === "bank" ? "取引名" : "店舗・取引先名")}
+                    </label>
+                    {entryType === "income" && (
+                      <span className="text-[11px] text-emerald-600 font-bold">
+                        ▼ 定型選択可
+                      </span>
+                    )}
+                  </div>
+                  {entryType === "income" && (
+                    <select
+                      value=""
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        if (!val) return;
+                        if (val === "店舗売上 (現金)") {
+                          setSourceType("store");
+                          setStorePaymentMethod("cash");
+                          setFormData(prev => ({ ...prev, payee: val, bank_name: "現金" }));
+                        } else if (val === "店舗売上 (楽天ターミナル)") {
+                          setSourceType("store");
+                          setStorePaymentMethod("rakuten_terminal");
+                          setFormData(prev => ({ ...prev, payee: val, bank_name: "楽天ターミナル" }));
+                        } else if (val === "Uber Eats (配達売上)") {
+                          setSourceType("uber");
+                          setFormData(prev => ({ ...prev, payee: val, bank_name: "楽天銀行" }));
+                        } else if (val === "Rocket Now (デリバリー売上)") {
+                          setSourceType("rocket");
+                          setFormData(prev => ({ ...prev, payee: val, bank_name: "三井住友銀行" }));
+                        } else {
+                          setFormData(prev => ({ ...prev, payee: val }));
+                        }
+                      }}
+                      className="w-full mb-1.5 px-3 py-2 bg-emerald-50/90 border border-emerald-200 rounded-xl text-xs font-bold text-emerald-950 outline-none cursor-pointer shadow-2xs hover:bg-emerald-100/60 transition-colors"
+                    >
+                      <option value="">▼ プルダウンから店舗・入金元を選択...</option>
+                      {STORE_PAYEE_PRESETS.map((preset, idx) => (
+                        <option key={idx} value={preset}>{preset}</option>
+                      ))}
+                    </select>
+                  )}
                   <input
                     type="text"
                     placeholder={entryType === "income" ? (sourceType === "store" ? "店舗レジ売上" : "Uber / Rocket Now") : "セブンイレブン、卸問屋など"}
@@ -1533,6 +1721,49 @@ function App() {
                   </div>
                 ))
               )}
+            </div>
+
+            {/* ☁️ Googleドライブ バックアップ・復元カード */}
+            <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 space-y-3">
+              <h2 className="text-xs font-bold text-slate-500">☁️ Googleドライブ JSONバックアップ・復元</h2>
+              <p className="text-xs text-slate-500">取引の登録・更新・削除時にドライブへ自動保存されます。万が一のデータ消失や端末移行時はここから一発復元できます。</p>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  disabled={driveBusy}
+                  onClick={handleDriveBackupNow}
+                  className="p-2.5 bg-sky-600 hover:bg-sky-700 text-white rounded-xl text-xs font-bold disabled:opacity-50 transition-colors shadow-sm"
+                >
+                  {driveBusy ? "通信中..." : "☁️ 今すぐドライブ保存"}
+                </button>
+                <button
+                  type="button"
+                  disabled={driveBusy}
+                  onClick={handleDriveRestoreNow}
+                  className="p-2.5 bg-sky-50 hover:bg-sky-100 border border-sky-300 text-sky-900 rounded-xl text-xs font-bold disabled:opacity-50 transition-colors shadow-sm"
+                >
+                  {driveBusy ? "通信中..." : "📥 ドライブから復元"}
+                </button>
+              </div>
+            </div>
+
+            {/* 🛡️ 端末へのバックアップ・復元 (消滅防止) */}
+            <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 space-y-3">
+              <h2 className="text-xs font-bold text-slate-500">🛡️ 端末へのバックアップ・復元 (消滅防止)</h2>
+              <p className="text-xs text-slate-500">ブラウザ内にも自動保存されていますが、JSONファイルとしてPCやスマホ手元に保存しておくと100%安全です。</p>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={handleDownloadBackup}
+                  className="p-2.5 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-xs font-bold transition-colors shadow-sm"
+                >
+                  💾 バックアップ保存 (JSON)
+                </button>
+                <label className="p-2.5 bg-slate-100 text-slate-700 border border-slate-300 rounded-xl text-xs font-bold text-center cursor-pointer hover:bg-slate-200 transition-colors shadow-sm">
+                  📂 ファイルから復元
+                  <input type="file" accept=".json" onChange={handleRestoreBackup} className="hidden" />
+                </label>
+              </div>
             </div>
           </div>
         )}

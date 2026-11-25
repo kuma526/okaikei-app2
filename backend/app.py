@@ -19,7 +19,8 @@ from pydantic import BaseModel
 from backend.database import (
     init_db, get_transactions, get_transaction_by_id, create_transaction,
     update_transaction, delete_transaction, get_monthly_summary,
-    get_setting, set_setting, get_all_settings, get_db_connection
+    get_setting, set_setting, get_all_settings, get_db_connection,
+    sync_transactions_to_db
 )
 from backend.export_service import export_to_excel, export_to_pdf, export_moneyforward_csv, export_yayoi_csv
 
@@ -32,6 +33,33 @@ os.makedirs(FRONTEND_DIR, exist_ok=True)
 
 # Google Apps Script Webhook URL設定（環境変数 GAS_WEBHOOK_URL から読み込み）
 GAS_WEBHOOK_URL = os.environ.get("GAS_WEBHOOK_URL", "").strip()
+
+def get_gas_url() -> str:
+    """環境変数またはDB設定から Google Apps Script Webhook URL を取得"""
+    url = os.environ.get("GAS_WEBHOOK_URL", "").strip() or GAS_WEBHOOK_URL
+    if not url:
+        url = get_setting("gas_webhook_url", "").strip()
+    return url
+
+def push_backup_to_drive(transactions: Optional[List[Dict[str, Any]]] = None) -> bool:
+    """Google ドライブへ全取引の JSON バックアップを同期保存"""
+    gas_url = get_gas_url()
+    if not gas_url:
+        return False
+    if transactions is None:
+        transactions = get_transactions()
+    try:
+        res = requests.post(
+            gas_url,
+            json={"action": "save_json_backup", "transactions": transactions},
+            headers={"Content-Type": "application/json"},
+            allow_redirects=True,
+            timeout=25
+        )
+        return res.ok
+    except Exception as e:
+        print(f"Google Drive JSON backup warning: {e}")
+        return False
 
 # アプリ初期化
 app = FastAPI(title="勘太郎 ver. 1.0", version="1.0.0")
@@ -232,6 +260,10 @@ def list_transactions(
 @app.post("/api/transactions")
 def add_transaction(data: TransactionCreate):
     tid = create_transaction(data.dict())
+    try:
+        push_backup_to_drive()
+    except Exception as e:
+        print(f"Auto drive backup warning: {e}")
     return {"id": tid, "message": "Transaction created successfully"}
 
 @app.get("/api/transactions/{id}")
@@ -247,6 +279,10 @@ def edit_transaction(id: int, data: TransactionUpdate):
     updated = update_transaction(id, update_data)
     if not updated:
         raise HTTPException(status_code=404, detail="Transaction not found")
+    try:
+        push_backup_to_drive()
+    except Exception as e:
+        print(f"Auto drive backup warning: {e}")
     return {"message": "Transaction updated successfully"}
 
 @app.delete("/api/transactions/{id}")
@@ -254,7 +290,67 @@ def remove_transaction(id: int):
     deleted = delete_transaction(id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Transaction not found")
+    try:
+        push_backup_to_drive()
+    except Exception as e:
+        print(f"Auto drive backup warning: {e}")
     return {"message": "Transaction deleted successfully"}
+
+# -----------------------------
+# バックアップ & 復元 API (Googleドライブ & ローカル同期)
+# -----------------------------
+@app.post("/api/backup/drive/save")
+def backup_drive_save():
+    """手動トリガー: 現在の全取引データをGoogleドライブにJSONバックアップ"""
+    txs = get_transactions()
+    gas_url = get_gas_url()
+    if not gas_url:
+        raise HTTPException(status_code=400, detail="Googleドライブ連携用 GAS_WEBHOOK_URL が設定されていません")
+    ok = push_backup_to_drive(txs)
+    if not ok:
+        raise HTTPException(status_code=500, detail="Googleドライブへのバックアップ保存に失敗しました")
+    return {"success": True, "count": len(txs)}
+
+@app.post("/api/backup/drive/load")
+def backup_drive_load():
+    """手動トリガー: Googleドライブ上のJSONバックアップから全データを復元・同期"""
+    gas_url = get_gas_url()
+    if not gas_url:
+        raise HTTPException(status_code=400, detail="Googleドライブ連携用 GAS_WEBHOOK_URL が設定されていません")
+    try:
+        res = requests.post(
+            gas_url,
+            json={"action": "load_json_backup"},
+            headers={"Content-Type": "application/json"},
+            allow_redirects=True,
+            timeout=25
+        )
+        data = res.json()
+        if not data.get("success"):
+            raise HTTPException(status_code=500, detail=data.get("error", "Googleドライブからのデータ読み込みに失敗しました"))
+        drive_txs = data.get("transactions", [])
+        if not isinstance(drive_txs, list):
+            drive_txs = []
+        sync_transactions_to_db(drive_txs)
+        merged = get_transactions()
+        return {"success": True, "transactions": merged, "count": len(merged)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/transactions/sync")
+def sync_transactions(client_txs: List[Dict[str, Any]]):
+    """ブラウザローカルストレージやバックアップJSONファイルからデータを復元・統合"""
+    if client_txs and isinstance(client_txs, list):
+        sync_transactions_to_db(client_txs)
+    merged = get_transactions()
+    try:
+        push_backup_to_drive(merged)
+    except Exception as e:
+        print(f"Sync drive backup warning: {e}")
+    return {"success": True, "transactions": merged, "count": len(merged)}
+
 
 # -----------------------------
 # 月次集計 API
@@ -359,7 +455,7 @@ async def upload_receipt(request: Request, file: Optional[UploadFile] = File(Non
     drive_file_url = None
 
     # Google Apps Script (GAS) へのアップロード処理
-    gas_url = os.environ.get("GAS_WEBHOOK_URL", "").strip() or GAS_WEBHOOK_URL or get_setting("gas_webhook_url", "").strip()
+    gas_url = get_gas_url()
     if gas_url and b64_data:
         try:
             gas_payload = {

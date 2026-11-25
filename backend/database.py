@@ -295,3 +295,97 @@ def get_monthly_summary(month: str) -> Dict[str, Any]:
         "daily_stats": daily_stats
     }
 
+
+def sync_transactions_to_db(items: List[Dict[str, Any]]) -> int:
+    """外部バックアップ（JSONファイルまたはGoogleドライブ）の取引リストをDBに同期・マージする。
+
+    既存IDがあれば更新し、なければ重複確認後に新規登録する。
+    """
+    if not items:
+        return 0
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    now = datetime.now().isoformat()
+    imported_count = 0
+
+    for item in items:
+        raw_id = item.get("id")
+        t_id = None
+        if raw_id is not None:
+            try:
+                t_id = int(raw_id)
+            except (ValueError, TypeError):
+                t_id = None
+
+        ocr_val = item.get("ocr_data", {})
+        if isinstance(ocr_val, (dict, list)):
+            ocr_str = json.dumps(ocr_val, ensure_ascii=False)
+        else:
+            ocr_str = str(ocr_val or "")
+
+        date_val = str(item.get("date") or datetime.now().strftime("%Y-%m-%d"))
+        type_val = str(item.get("type") or "expense")
+        source_type_val = str(item.get("source_type") or "manual_expense")
+        category_val = str(item.get("category") or "雑費")
+        try:
+            amount_val = int(item.get("amount") or 0)
+        except (ValueError, TypeError):
+            amount_val = 0
+        payee_val = str(item.get("payee") or "")
+        desc_val = str(item.get("description") or "")
+        bank_name_val = str(item.get("bank_name") or "現金")
+        receipt_path_val = str(item.get("receipt_path") or "")
+
+        exists = False
+        if t_id is not None:
+            cursor.execute("SELECT id FROM transactions WHERE id = ?", (t_id,))
+            row = cursor.fetchone()
+            if row:
+                exists = True
+                cursor.execute("""
+                    UPDATE transactions SET
+                        date = ?, type = ?, source_type = ?, category = ?,
+                        amount = ?, payee = ?, description = ?, bank_name = ?,
+                        receipt_path = ?, ocr_data = ?, updated_at = ?
+                    WHERE id = ?
+                """, (
+                    date_val, type_val, source_type_val, category_val,
+                    amount_val, payee_val, desc_val, bank_name_val,
+                    receipt_path_val, ocr_str, now, t_id
+                ))
+                imported_count += 1
+
+        if not exists:
+            cursor.execute("""
+                SELECT id FROM transactions 
+                WHERE date = ? AND type = ? AND amount = ? AND payee = ? AND description = ?
+            """, (date_val, type_val, amount_val, payee_val, desc_val))
+            row = cursor.fetchone()
+            if not row:
+                if t_id is not None:
+                    cursor.execute("""
+                        INSERT INTO transactions (
+                            id, date, type, source_type, category, amount, payee,
+                            description, bank_name, receipt_path, ocr_data, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        t_id, date_val, type_val, source_type_val, category_val, amount_val, payee_val,
+                        desc_val, bank_name_val, receipt_path_val, ocr_str, now, now
+                    ))
+                else:
+                    cursor.execute("""
+                        INSERT INTO transactions (
+                            date, type, source_type, category, amount, payee,
+                            description, bank_name, receipt_path, ocr_data, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        date_val, type_val, source_type_val, category_val, amount_val, payee_val,
+                        desc_val, bank_name_val, receipt_path_val, ocr_str, now, now
+                    ))
+                imported_count += 1
+
+    conn.commit()
+    conn.close()
+    return imported_count
+
+
