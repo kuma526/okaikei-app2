@@ -296,19 +296,78 @@ def get_monthly_summary(month: str) -> Dict[str, Any]:
     }
 
 
-def sync_transactions_to_db(items: List[Dict[str, Any]]) -> int:
-    """外部バックアップ（JSONファイルまたはGoogleドライブ）の取引リストをDBに同期・マージする。
+def is_sample_transaction(t: Dict[str, Any]) -> bool:
+    """本番環境に混入させないダミー/サンプルデータ判定"""
+    sample_payees = {
+        "出光 セルフ給油",
+        "業務用品問屋 丸十商事",
+        "業務卸問屋 丸十商事",
+        "Uber Eats (配達報酬)",
+        "Rocket Now (デリバリー報酬)"
+    }
+    sample_descriptions = {
+        "ランチタイム店頭現金売上",
+        "カード決済 (総額: ¥18,000 / 手数料(3.24%): ¥583 / 受取額: ¥17,417)",
+        "第1週 配達パートナー売上振込",
+        "即時出金 振込入金",
+        "梱包用資材・テイクアウト用包材仕入れ",
+        "配達車両 レギュラー給油 28L",
+        "業務連絡用スマホ代・光通信費 銀行口座振替",
+        "営業資金 口座預入"
+    }
+    payee = str(t.get("payee") or "").strip()
+    desc = str(t.get("description") or "").strip()
+    if payee in sample_payees:
+        return True
+    if desc in sample_descriptions:
+        return True
+    return False
 
-    既存IDがあれば更新し、なければ重複確認後に新規登録する。
+
+def purge_sample_data() -> int:
+    """DB内に残存するダミー/サンプルデータを一掃する"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        DELETE FROM transactions 
+        WHERE payee IN ('出光 セルフ給油', '業務用品問屋 丸十商事', '業務卸問屋 丸十商事', 'Uber Eats (配達報酬)', 'Rocket Now (デリバリー報酬)')
+           OR description IN (
+               'ランチタイム店頭現金売上',
+               'カード決済 (総額: ¥18,000 / 手数料(3.24%): ¥583 / 受取額: ¥17,417)',
+               '第1週 配達パートナー売上振込',
+               '即時出金 振込入金',
+               '梱包用資材・テイクアウト用包材仕入れ',
+               '配達車両 レギュラー給油 28L',
+               '業務連絡用スマホ代・光通信費 銀行口座振替',
+               '営業資金 口座預入'
+           )
+    """)
+    deleted = cursor.rowcount
+    conn.commit()
+    conn.close()
+    return deleted
+
+
+def restore_transactions_to_db(items: List[Dict[str, Any]], replace: bool = False) -> int:
+    """外部バックアップ（JSONファイルまたはGoogleドライブ）の取引リストをDBに復元・同期する。
+    replace=True の場合、既存データを消去した上で完全復元する。
+    replace=False の場合、既存データとマージ・同期する。
     """
-    if not items:
+    if not isinstance(items, list):
         return 0
     conn = get_db_connection()
     cursor = conn.cursor()
     now = datetime.now().isoformat()
     imported_count = 0
 
+    if replace:
+        cursor.execute("DELETE FROM transactions")
+        conn.commit()
+
     for item in items:
+        if is_sample_transaction(item):
+            continue
+
         raw_id = item.get("id")
         t_id = None
         if raw_id is not None:
@@ -337,7 +396,7 @@ def sync_transactions_to_db(items: List[Dict[str, Any]]) -> int:
         receipt_path_val = str(item.get("receipt_path") or "")
 
         exists = False
-        if t_id is not None:
+        if not replace and t_id is not None:
             cursor.execute("SELECT id FROM transactions WHERE id = ?", (t_id,))
             row = cursor.fetchone()
             if row:
@@ -356,13 +415,17 @@ def sync_transactions_to_db(items: List[Dict[str, Any]]) -> int:
                 imported_count += 1
 
         if not exists:
-            cursor.execute("""
-                SELECT id FROM transactions 
-                WHERE date = ? AND type = ? AND amount = ? AND payee = ? AND description = ?
-            """, (date_val, type_val, amount_val, payee_val, desc_val))
-            row = cursor.fetchone()
+            if not replace:
+                cursor.execute("""
+                    SELECT id FROM transactions 
+                    WHERE date = ? AND type = ? AND amount = ? AND payee = ? AND description = ?
+                """, (date_val, type_val, amount_val, payee_val, desc_val))
+                row = cursor.fetchone()
+            else:
+                row = None
+
             if not row:
-                if t_id is not None:
+                if t_id is not None and replace:
                     cursor.execute("""
                         INSERT INTO transactions (
                             id, date, type, source_type, category, amount, payee,
@@ -387,5 +450,11 @@ def sync_transactions_to_db(items: List[Dict[str, Any]]) -> int:
     conn.commit()
     conn.close()
     return imported_count
+
+
+def sync_transactions_to_db(items: List[Dict[str, Any]]) -> int:
+    """外部バックアップ（JSONファイルまたはGoogleドライブ）の取引リストをDBに同期・マージする。"""
+    return restore_transactions_to_db(items, replace=False)
+
 
 

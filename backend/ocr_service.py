@@ -183,43 +183,37 @@ def fallback_intelligent_receipt_parser(image_path: str, filename: str = "") -> 
     if any(k in clean_name for k in ["shiire", "仕入", "wholesale", "order", "zaiko"]):
         category = "仕入高"
         source_type = "purchase"
-        payee = "業務卸問屋 丸十商事"
-        amount = 14800
-        items = [
-            {"name": "テイクアウト用容器 50組", "price": 6800, "quantity": 1, "tax_rate": 10},
-            {"name": "包装用クラフト袋 200枚", "price": 8000, "quantity": 1, "tax_rate": 10}
-        ]
-        reason = "伝票名または品目から、デリバリー・販売業務用の仕入れ包材と推測しました"
+        payee = "仕入先（画像より読み取り）"
+        amount = 0
+        items = []
+        reason = "ファイル名から仕入高と推測しました。レシート記載の金額を入力してください。"
     elif any(k in clean_name for k in ["gas", "eneos", "shell", "idemitsu", "etc", "parking", "給油"]):
         category = "旅費交通費"
         source_type = "manual_expense"
-        payee = "ENEOS セルフ給油SS"
-        amount = 4850
-        items = [{"name": "レギュラーガソリン 29.4L", "price": 4850, "quantity": 1, "tax_rate": 10}]
-        reason = "ガソリンスタンドでの給油伝票と推測されました"
+        payee = "給油・交通機関（画像より読み取り）"
+        amount = 0
+        items = []
+        reason = "給油または交通費関連の伝票と推測しました。レシート記載の金額を入力してください。"
     elif any(k in clean_name for k in ["bank", "furikomi", "meisai", "振込", "明細", "口座"]):
         category = "支払手数料"
         source_type = "bank_transfer"
-        payee = "三井住友銀行 振込明細"
-        amount = 330
-        items = [{"name": "他行あて電信振込手数料", "price": 330, "quantity": 1, "tax_rate": 10}]
-        reason = "銀行の振込決済手数料と推測されました"
+        payee = "金融機関 振込明細"
+        amount = 0
+        items = []
+        reason = "振込決済または手数料伝票と推測しました。伝票記載の金額を入力してください。"
     elif any(k in clean_name for k in ["seven", "lawson", "familymart", "cvs", "konbini", "コンビニ"]):
         category = "消耗品費"
         source_type = "manual_expense"
-        payee = "セブン-イレブン"
-        amount = 1240
-        items = [
-            {"name": "修正テープ 5mm", "price": 280, "quantity": 1, "tax_rate": 10},
-            {"name": "クリアファイル 10P", "price": 960, "quantity": 1, "tax_rate": 10}
-        ]
-        reason = "店舗名および購入事務消耗品から消耗品費と推測されました"
+        payee = "コンビニ（画像より読み取り）"
+        amount = 0
+        items = []
+        reason = "コンビニでの購入伝票と推測しました。レシート記載の金額を入力してください。"
     else:
         category = "仕入高"
         source_type = "purchase"
         payee = "店舗・仕入先（画像より読み取り）"
-        amount = 5800
-        items = [{"name": "仕入れ商品・業務関連品", "price": 5800, "quantity": 1, "tax_rate": 10}]
+        amount = 0
+        items = []
         reason = "標準推定モード：仕入高（ドロップダウンからいつでも変更可能）"
 
     return {

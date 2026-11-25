@@ -10,7 +10,7 @@ from datetime import datetime, date
 from typing import Optional, List, Dict, Any
 from urllib.parse import quote
 import requests
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Query, Response, Request
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Query, Response, Request, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse
@@ -20,7 +20,7 @@ from backend.database import (
     init_db, get_transactions, get_transaction_by_id, create_transaction,
     update_transaction, delete_transaction, get_monthly_summary,
     get_setting, set_setting, get_all_settings, get_db_connection,
-    sync_transactions_to_db
+    sync_transactions_to_db, restore_transactions_to_db, purge_sample_data
 )
 from backend.export_service import export_to_excel, export_to_pdf, export_moneyforward_csv, export_yayoi_csv
 
@@ -110,8 +110,10 @@ class SyncMonthRequest(BaseModel):
     calendar_id: Optional[str] = "primary"
 
 
-def seed_sample_data_if_empty():
-    """データベースが空の場合、動作確認用のサンプルデータを投入"""
+def seed_sample_data_if_empty(force: bool = False):
+    """動作確認用テストスクリプト専用（本番環境では自動投入されません）"""
+    if not force and os.environ.get("ENABLE_SAMPLE_DATA", "").lower() != "true":
+        return
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT COUNT(*) FROM transactions")
@@ -233,7 +235,8 @@ def seed_sample_data_if_empty():
 @app.on_event("startup")
 def startup_event():
     init_db()
-    seed_sample_data_if_empty()
+    # 本番環境でダミーデータが混入・残存しないようパージ処理を実行
+    purge_sample_data()
 
 
 # -----------------------------
@@ -340,8 +343,14 @@ def backup_drive_load():
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/transactions/sync")
-def sync_transactions(client_txs: List[Dict[str, Any]]):
+def sync_transactions(payload: Any = Body(...)):
     """ブラウザローカルストレージやバックアップJSONファイルからデータを復元・統合"""
+    if isinstance(payload, dict):
+        client_txs = payload.get("transactions", [])
+    elif isinstance(payload, list):
+        client_txs = payload
+    else:
+        client_txs = []
     if client_txs and isinstance(client_txs, list):
         sync_transactions_to_db(client_txs)
     merged = get_transactions()
@@ -350,6 +359,30 @@ def sync_transactions(client_txs: List[Dict[str, Any]]):
     except Exception as e:
         print(f"Sync drive backup warning: {e}")
     return {"success": True, "transactions": merged, "count": len(merged)}
+
+@app.post("/api/transactions/restore")
+def restore_transactions_api(payload: Any = Body(...)):
+    """JSONバックアップから全データを復元 (replace=Trueで完全上書き復元、Falseでマージ)"""
+    if isinstance(payload, dict):
+        client_txs = payload.get("transactions", [])
+        replace = bool(payload.get("replace", False))
+    elif isinstance(payload, list):
+        client_txs = payload
+        replace = False
+    else:
+        client_txs = []
+        replace = False
+
+    if not isinstance(client_txs, list):
+        raise HTTPException(status_code=400, detail="transactions must be a list")
+
+    count = restore_transactions_to_db(client_txs, replace=replace)
+    merged = get_transactions()
+    try:
+        push_backup_to_drive(merged)
+    except Exception as e:
+        print(f"Restore drive backup warning: {e}")
+    return {"success": True, "count": count, "total": len(merged), "transactions": merged}
 
 
 # -----------------------------

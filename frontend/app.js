@@ -222,20 +222,60 @@ function App() {
     setTimeout(() => setAlertMsg(null), 4000);
   };
 
+  // ダミー/サンプルデータ判定
+  const isSampleTransaction = (t) => {
+    if (!t) return false;
+    const samplePayees = [
+      "出光 セルフ給油",
+      "業務用品問屋 丸十商事",
+      "業務卸問屋 丸十商事",
+      "Uber Eats (配達報酬)",
+      "Rocket Now (デリバリー報酬)"
+    ];
+    const sampleDescriptions = [
+      "ランチタイム店頭現金売上",
+      "カード決済 (総額: ¥18,000 / 手数料(3.24%): ¥583 / 受取額: ¥17,417)",
+      "第1週 配達パートナー売上振込",
+      "即時出金 振込入金",
+      "梱包用資材・テイクアウト用包材仕入れ",
+      "配達車両 レギュラー給油 28L",
+      "業務連絡用スマホ代・光通信費 銀行口座振替",
+      "営業資金 口座預入"
+    ];
+    if (samplePayees.includes(t.payee)) return true;
+    if (sampleDescriptions.includes(t.description)) return true;
+    return false;
+  };
+
   // ブラウザのローカルバックアップとサーバーデータの自動統合
   const syncWithLocalBackup = async () => {
     try {
       const saved = localStorage.getItem(LOCAL_BACKUP_KEY);
       const localTxs = saved ? JSON.parse(saved) : [];
+      // サンプルデータの残骸を除去
+      const cleanTxs = Array.isArray(localTxs) ? localTxs.filter(t => !isSampleTransaction(t)) : [];
+      if (cleanTxs.length !== (Array.isArray(localTxs) ? localTxs.length : 0)) {
+        localStorage.setItem(LOCAL_BACKUP_KEY, JSON.stringify(cleanTxs));
+      }
+      if (cleanTxs.length === 0) {
+        const res = await fetch("/api/transactions");
+        if (res.ok) {
+          const allTxs = await res.json();
+          const cleanServerTxs = Array.isArray(allTxs) ? allTxs.filter(t => !isSampleTransaction(t)) : [];
+          localStorage.setItem(LOCAL_BACKUP_KEY, JSON.stringify(cleanServerTxs));
+        }
+        return;
+      }
       const res = await fetch("/api/transactions/sync", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(localTxs)
+        body: JSON.stringify(cleanTxs)
       });
       if (res.ok) {
         const data = await res.json();
         if (data.transactions) {
-          localStorage.setItem(LOCAL_BACKUP_KEY, JSON.stringify(data.transactions));
+          const cleanMerged = data.transactions.filter(t => !isSampleTransaction(t));
+          localStorage.setItem(LOCAL_BACKUP_KEY, JSON.stringify(cleanMerged));
         }
       }
     } catch (e) {
@@ -249,7 +289,8 @@ function App() {
       const res = await fetch("/api/transactions");
       if (res.ok) {
         const allTxs = await res.json();
-        localStorage.setItem(LOCAL_BACKUP_KEY, JSON.stringify(allTxs));
+        const cleanTxs = Array.isArray(allTxs) ? allTxs.filter(t => !isSampleTransaction(t)) : [];
+        localStorage.setItem(LOCAL_BACKUP_KEY, JSON.stringify(cleanTxs));
       }
     } catch (e) {
       console.error("Update local backup error:", e);
@@ -282,7 +323,8 @@ function App() {
       const res = await fetch("/api/backup/drive/load", { method: "POST" });
       const data = await res.json();
       if (res.ok && data.success) {
-        localStorage.setItem(LOCAL_BACKUP_KEY, JSON.stringify(data.transactions || []));
+        const cleanMerged = (data.transactions || []).filter(t => !isSampleTransaction(t));
+        localStorage.setItem(LOCAL_BACKUP_KEY, JSON.stringify(cleanMerged));
         await loadTransactions();
         await loadSummary();
         showAlert("☁️ Googleドライブからデータを復元しました！");
@@ -301,51 +343,77 @@ function App() {
     try {
       const res = await fetch("/api/transactions");
       const allTxs = await res.json();
-      const blob = new Blob([JSON.stringify(allTxs, null, 2)], { type: "application/json" });
+      const cleanTxs = (Array.isArray(allTxs) ? allTxs : []).filter(t => !isSampleTransaction(t));
+      const blob = new Blob([JSON.stringify(cleanTxs, null, 2)], { type: "application/json" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
       a.download = `kantaro_backup_${new Date().toISOString().slice(0, 10)}.json`;
       a.click();
       URL.revokeObjectURL(url);
-      showAlert("💾 バックアップJSONをダウンロードしました！");
+      showAlert(`💾 バックアップJSON（${cleanTxs.length}件）をダウンロードしました！`);
     } catch (e) {
       showAlert("バックアップの保存に失敗しました", "error");
     }
   };
 
-  // 端末のJSONファイルからの復元・同期
+  // 端末のJSONファイルからの復元・インポート
   const handleRestoreBackup = (e) => {
-    const file = e.target.files[0];
+    const file = e.target.files && e.target.files[0];
     if (!file) return;
     const reader = new FileReader();
     reader.onload = async (event) => {
       try {
         const json = JSON.parse(event.target.result);
-        if (!Array.isArray(json)) throw new Error("無効なバックアップファイル形式です");
-        if (!confirm(`バックアップデータ（${json.length}件）を復元・同期しますか？`)) return;
-        const res = await fetch("/api/transactions/sync", {
+        let items = null;
+        if (Array.isArray(json)) {
+          items = json;
+        } else if (json && Array.isArray(json.transactions)) {
+          items = json.transactions;
+        } else if (json && Array.isArray(json.data)) {
+          items = json.data;
+        }
+        if (!items) {
+          throw new Error("無効なJSONバックアップファイル形式です（取引データ配列が見つかりません）");
+        }
+
+        // サンプルデータ残骸を除去
+        const cleanItems = items.filter(t => !isSampleTransaction(t));
+
+        if (!confirm(`バックアップデータ（${cleanItems.length}件）を復元・インポートしますか？`)) {
+          return;
+        }
+
+        const shouldReplace = confirm(
+          `既存データを上書きして完全復元しますか？\n\n` +
+          `【OK】: 既存の取引データをクリアしてバックアップ内容で完全置き換え\n` +
+          `【キャンセル】: 既存データを残したまま追加・統合（マージ）`
+        );
+
+        const res = await fetch("/api/transactions/restore", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(json)
+          body: JSON.stringify({ transactions: cleanItems, replace: shouldReplace })
         });
         if (res.ok) {
           const data = await res.json();
           if (data.transactions) {
-            localStorage.setItem(LOCAL_BACKUP_KEY, JSON.stringify(data.transactions));
+            localStorage.setItem(LOCAL_BACKUP_KEY, JSON.stringify(data.transactions.filter(t => !isSampleTransaction(t))));
           }
-          showAlert("✅ バックアップからデータを復元・同期しました！");
+          showAlert(shouldReplace ? `✅ ${cleanItems.length}件のデータを完全復元しました！` : `✅ ${cleanItems.length}件のデータを復元・追加しました！`);
           await loadTransactions();
           await loadSummary();
         } else {
-          showAlert("復元に失敗しました", "error");
+          const err = await res.json().catch(() => ({}));
+          showAlert(err.detail || "復元に失敗しました", "error");
         }
       } catch (err) {
         showAlert("ファイルの読み込みに失敗しました: " + err.message, "error");
+      } finally {
+        e.target.value = "";
       }
     };
     reader.readAsText(file);
-    e.target.value = "";
   };
 
   const loadTransactions = async () => {
@@ -757,6 +825,13 @@ function App() {
           body: JSON.stringify({ key: "card_fee_rate", value: cardFeeRate })
         });
       }
+      if (settings.gas_webhook_url !== undefined) {
+        await fetch("/api/settings", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ key: "gas_webhook_url", value: settings.gas_webhook_url.trim() })
+        });
+      }
       showAlert("設定を保存しました！");
       loadSettings();
     } catch (e) {
@@ -785,6 +860,80 @@ function App() {
       return true;
     });
   }, [transactions, filterType, filterCategory, searchQuery]);
+
+  // バックアップ・復元カード共通UI
+  const renderBackupRestoreCards = (areaSuffix = "") => (
+    <div className="space-y-4 pt-1">
+      {/* 🛡️ 端末へのバックアップ・復元 (消滅防止 / JSONインポート) */}
+      <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 space-y-3">
+        <div className="flex items-center space-x-2">
+          <span className="text-xl">🛡️</span>
+          <div>
+            <h2 className="text-sm font-bold text-slate-800">端末へのバックアップ & 復元 (JSONインポート)</h2>
+            <p className="text-[11px] text-slate-400">PC・スマホの手元端末にバックアップを保存・ファイルから即時復元</p>
+          </div>
+        </div>
+        <p className="text-xs text-slate-500 leading-relaxed">
+          ブラウザ内にも自動同期保存されていますが、JSONファイルとして手元に保存・いつでも復元（インポート）できます。
+        </p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
+          <button
+            type="button"
+            onClick={handleDownloadBackup}
+            className="p-3 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-xs font-bold transition-all shadow-sm flex items-center justify-center space-x-2 active:scale-[0.98]"
+          >
+            <span>💾</span>
+            <span>バックアップ保存 (JSON出力)</span>
+          </button>
+          <label className="p-3 bg-indigo-50 hover:bg-indigo-100 text-indigo-900 border border-indigo-200 rounded-xl text-xs font-bold text-center cursor-pointer transition-all shadow-sm flex items-center justify-center space-x-2 active:scale-[0.98]">
+            <span>📂</span>
+            <span>JSONファイルから復元 (インポート)</span>
+            <input
+              id={`restore-file-input-${areaSuffix}`}
+              type="file"
+              accept=".json"
+              onChange={handleRestoreBackup}
+              className="hidden"
+            />
+          </label>
+        </div>
+      </div>
+
+      {/* ☁️ Googleドライブ バックアップ・復元カード */}
+      <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 space-y-3">
+        <div className="flex items-center space-x-2">
+          <span className="text-xl">☁️</span>
+          <div>
+            <h2 className="text-sm font-bold text-slate-800">Googleドライブ JSONバックアップ・復元</h2>
+            <p className="text-[11px] text-slate-400">Googleドライブ連携クラウド保存・クラウド復元</p>
+          </div>
+        </div>
+        <p className="text-xs text-slate-500 leading-relaxed">
+          取引の登録・更新・削除時にドライブへ自動同期保存されます。万が一のデータ消失や端末移行時はここから一発復元できます。
+        </p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
+          <button
+            type="button"
+            disabled={driveBusy}
+            onClick={handleDriveBackupNow}
+            className="p-3 bg-sky-600 hover:bg-sky-700 text-white rounded-xl text-xs font-bold disabled:opacity-50 transition-all shadow-sm flex items-center justify-center space-x-2 active:scale-[0.98]"
+          >
+            <span>☁️</span>
+            <span>{driveBusy ? "通信中..." : "今すぐドライブ保存"}</span>
+          </button>
+          <button
+            type="button"
+            disabled={driveBusy}
+            onClick={handleDriveRestoreNow}
+            className="p-3 bg-sky-50 hover:bg-sky-100 border border-sky-300 text-sky-900 rounded-xl text-xs font-bold disabled:opacity-50 transition-all shadow-sm flex items-center justify-center space-x-2 active:scale-[0.98]"
+          >
+            <span>📥</span>
+            <span>{driveBusy ? "通信中..." : "ドライブから復元"}</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 
   return (
     <div className="max-w-md mx-auto sm:max-w-2xl md:max-w-4xl min-h-screen bg-slate-50 pb-24 text-slate-800">
@@ -1723,48 +1872,8 @@ function App() {
               )}
             </div>
 
-            {/* ☁️ Googleドライブ バックアップ・復元カード */}
-            <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 space-y-3">
-              <h2 className="text-xs font-bold text-slate-500">☁️ Googleドライブ JSONバックアップ・復元</h2>
-              <p className="text-xs text-slate-500">取引の登録・更新・削除時にドライブへ自動保存されます。万が一のデータ消失や端末移行時はここから一発復元できます。</p>
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  disabled={driveBusy}
-                  onClick={handleDriveBackupNow}
-                  className="p-2.5 bg-sky-600 hover:bg-sky-700 text-white rounded-xl text-xs font-bold disabled:opacity-50 transition-colors shadow-sm"
-                >
-                  {driveBusy ? "通信中..." : "☁️ 今すぐドライブ保存"}
-                </button>
-                <button
-                  type="button"
-                  disabled={driveBusy}
-                  onClick={handleDriveRestoreNow}
-                  className="p-2.5 bg-sky-50 hover:bg-sky-100 border border-sky-300 text-sky-900 rounded-xl text-xs font-bold disabled:opacity-50 transition-colors shadow-sm"
-                >
-                  {driveBusy ? "通信中..." : "📥 ドライブから復元"}
-                </button>
-              </div>
-            </div>
-
-            {/* 🛡️ 端末へのバックアップ・復元 (消滅防止) */}
-            <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 space-y-3">
-              <h2 className="text-xs font-bold text-slate-500">🛡️ 端末へのバックアップ・復元 (消滅防止)</h2>
-              <p className="text-xs text-slate-500">ブラウザ内にも自動保存されていますが、JSONファイルとしてPCやスマホ手元に保存しておくと100%安全です。</p>
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={handleDownloadBackup}
-                  className="p-2.5 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-xs font-bold transition-colors shadow-sm"
-                >
-                  💾 バックアップ保存 (JSON)
-                </button>
-                <label className="p-2.5 bg-slate-100 text-slate-700 border border-slate-300 rounded-xl text-xs font-bold text-center cursor-pointer hover:bg-slate-200 transition-colors shadow-sm">
-                  📂 ファイルから復元
-                  <input type="file" accept=".json" onChange={handleRestoreBackup} className="hidden" />
-                </label>
-              </div>
-            </div>
+            {/* バックアップ・復元エリア */}
+            {renderBackupRestoreCards("list")}
           </div>
         )}
 
@@ -1856,6 +1965,9 @@ function App() {
                 <li><b>弥生会計 / やよいの青色申告</b>: 「仕訳日記帳」画面の「ファイル」→「インポート」からダウンロードしたCSVを読み込みます。</li>
               </ul>
             </div>
+
+            {/* バックアップ & 復元エリア */}
+            {renderBackupRestoreCards("export")}
           </div>
         )}
 
@@ -1905,6 +2017,21 @@ function App() {
                   </div>
                 </div>
 
+                {/* Google Apps Script (GAS) Webhook URL */}
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">
+                    Google Drive連携 GAS Webhook URL (任意)
+                  </label>
+                  <input
+                    type="url"
+                    placeholder="https://script.google.com/macros/s/.../exec"
+                    value={settings.gas_webhook_url || ""}
+                    onChange={(e) => setSettings({ ...settings, gas_webhook_url: e.target.value })}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs focus:bg-white outline-none font-mono"
+                  />
+                  <p className="text-[11px] text-slate-400 mt-1">※Googleドライブ自動JSONバックアップや領収書画像連携に使用します。</p>
+                </div>
+
                 <button
                   type="submit"
                   className="w-full py-3 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-xl shadow-md text-sm transition-all"
@@ -1913,6 +2040,9 @@ function App() {
                 </button>
               </form>
             </div>
+
+            {/* バックアップ & 復元エリア */}
+            {renderBackupRestoreCards("settings")}
           </div>
         )}
       </main>

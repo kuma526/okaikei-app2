@@ -12,14 +12,14 @@ if sys.stdout.encoding.lower() != 'utf-8':
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from backend.database import init_db, get_transactions, get_monthly_summary, create_transaction
+from backend.database import init_db, get_transactions, get_monthly_summary, create_transaction, purge_sample_data
 from backend.app import seed_sample_data_if_empty
 from backend.export_service import export_to_excel, export_to_pdf, export_moneyforward_csv, export_yayoi_csv
 
 def test_all():
     print("1. データベース初期化テスト...")
     init_db()
-    seed_sample_data_if_empty()
+    seed_sample_data_if_empty(force=True)
 
     print("2. 取引取得テスト...")
     today_month = "2026-10"
@@ -47,6 +47,10 @@ def test_all():
     print("7. エクスポートテスト (弥生会計 CSV)...")
     yayoi_csv = export_yayoi_csv(today_month)
     print(f"  弥生 CSV 行数: {len(yayoi_csv.splitlines())} 行")
+
+    print("8. テストデータ・ダミークリーンアップ...")
+    cleaned = purge_sample_data()
+    print(f"  クリーンアップ件数: {cleaned} 件")
 
     print("\n✅ 全てのコア機能テストが正常に通過しました！(Google認証不要・スタンドアロン完全動作)")
 
